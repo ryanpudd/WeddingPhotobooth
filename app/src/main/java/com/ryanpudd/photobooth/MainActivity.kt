@@ -2,13 +2,15 @@ package com.ryanpudd.photobooth
 
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 enum class BoothState {
-    IDLE, COUNTDOWN_PRECAPTURE, REVIEW
+    IDLE, COUNTDOWN_PRECAPTURE, CAPTURING, REVIEW
 }
 
 class MainActivity : AppCompatActivity() {
@@ -19,6 +21,13 @@ class MainActivity : AppCompatActivity() {
 
     private var currentState = BoothState.IDLE
     private var reviewTimer: CountDownTimer? = null
+    private var preCaptureTimer: CountDownTimer? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        preCaptureTimer?.cancel()
+        reviewTimer?.cancel()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,28 +60,34 @@ class MainActivity : AppCompatActivity() {
     private fun resetToIdle() {
         currentState = BoothState.IDLE
         reviewTimer?.cancel()
-        statusOverlayText.text = "Tap to take your photo!"
+        preCaptureTimer?.cancel()
+        statusOverlayText.text = getString(R.string.tap_to_take_photo)
         statusOverlayText.visibility = View.VISIBLE
         btnKeep.visibility = View.GONE
         btnRetake.visibility = View.GONE
     }
 
     private fun startPreCaptureCountdown() {
+        reviewTimer?.cancel()
+        preCaptureTimer?.cancel()
         currentState = BoothState.COUNTDOWN_PRECAPTURE
         btnKeep.visibility = View.GONE
         btnRetake.visibility = View.GONE
         statusOverlayText.visibility = View.VISIBLE
 
-        object : CountDownTimer(3000, 1000) {
+        preCaptureTimer = object : CountDownTimer(3000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 val seconds = (millisUntilFinished / 1000) + 1
-                statusOverlayText.text = "$seconds..."
+                statusOverlayText.text = getString(R.string.countdown_seconds, seconds)
             }
 
             override fun onFinish() {
-                statusOverlayText.text = "Smile!"
+                currentState = BoothState.CAPTURING
+                statusOverlayText.text = getString(R.string.smile)
                 // Trigger capture pipeline here
-                showReviewScreen()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    showReviewScreen()
+                }, 1000)
             }
         }.start()
     }
@@ -91,7 +106,7 @@ class MainActivity : AppCompatActivity() {
         reviewTimer = object : CountDownTimer(8000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 val seconds = (millisUntilFinished / 1000) + 1
-                statusOverlayText.text = "Saving in $seconds..."
+                statusOverlayText.text = getString(R.string.saving_in_seconds, seconds)
             }
 
             override fun onFinish() {
