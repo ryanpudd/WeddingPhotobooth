@@ -6,8 +6,8 @@ plugins {
 android {
     namespace = "com.ryanpudd.photobooth"
     compileSdk = 33
-    // Set a pinned NDK version for reproducibility.
-    ndkVersion = "25.1.8937393" 
+    // Pin exact NDK version for build reproducibility
+    ndkVersion = "25.2.9519653" 
 
     defaultConfig {
         applicationId = "com.ryanpudd.photobooth"
@@ -31,11 +31,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "17"
     }
 }
 
