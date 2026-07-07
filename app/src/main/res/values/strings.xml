@@ -7,4 +7,5 @@
     <string name="smile">Smile!</string>
     <string name="countdown_seconds">%1$d...</string>
     <string name="saving_in_seconds">Saving in %1$d...</string>
+    <string name="device_admin_description">Enables full lockdown kiosk modes for the wedding photobooth.</string>
 </resources>

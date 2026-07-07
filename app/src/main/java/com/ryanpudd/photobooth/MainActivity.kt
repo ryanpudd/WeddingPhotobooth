@@ -23,23 +23,32 @@ class MainActivity : AppCompatActivity() {
     private var reviewTimer: CountDownTimer? = null
     private var preCaptureTimer: CountDownTimer? = null
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val captureRunnable = Runnable { showReviewScreen() }
+    
+    // Heartbeat runnable to update watchdog preference every 5 seconds
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            WatchdogScheduler.updateHeartbeat(this@MainActivity)
+            mainHandler.postDelayed(this, 5000)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         preCaptureTimer?.cancel()
         reviewTimer?.cancel()
+        mainHandler.removeCallbacks(captureRunnable)
+        mainHandler.removeCallbacks(heartbeatRunnable)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Force fullscreen immersion
-        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN)
+        // Initialize and start watchdog heartbeat
+        WatchdogScheduler.schedule(this)
+        mainHandler.post(heartbeatRunnable)
 
         statusOverlayText = findViewById(R.id.statusOverlayText)
         btnKeep = findViewById(R.id.btnKeep)
@@ -57,10 +66,27 @@ class MainActivity : AppCompatActivity() {
         resetToIdle()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            applyImmersiveMode()
+        }
+    }
+
+    private fun applyImmersiveMode() {
+        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_FULLSCREEN)
+    }
+
     private fun resetToIdle() {
         currentState = BoothState.IDLE
         reviewTimer?.cancel()
         preCaptureTimer?.cancel()
+        mainHandler.removeCallbacks(captureRunnable)
         statusOverlayText.text = getString(R.string.tap_to_take_photo)
         statusOverlayText.visibility = View.VISIBLE
         btnKeep.visibility = View.GONE
@@ -70,6 +96,7 @@ class MainActivity : AppCompatActivity() {
     private fun startPreCaptureCountdown() {
         reviewTimer?.cancel()
         preCaptureTimer?.cancel()
+        mainHandler.removeCallbacks(captureRunnable)
         currentState = BoothState.COUNTDOWN_PRECAPTURE
         btnKeep.visibility = View.GONE
         btnRetake.visibility = View.GONE
@@ -85,9 +112,7 @@ class MainActivity : AppCompatActivity() {
                 currentState = BoothState.CAPTURING
                 statusOverlayText.text = getString(R.string.smile)
                 // Trigger capture pipeline here
-                Handler(Looper.getMainLooper()).postDelayed({
-                    showReviewScreen()
-                }, 1000)
+                mainHandler.postDelayed(captureRunnable, 1000)
             }
         }.start()
     }
