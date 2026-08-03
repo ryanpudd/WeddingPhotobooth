@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Photobooth</string>
+    <string name="tap_to_take_photo">Tap to take your photo!</string>
+    <string name="keep">Keep</string>
+    <string name="retake">Retake</string>
+    <string name="smile">Smile!</string>
+    <string name="countdown_seconds">%1$d...</string>
+    <string name="saving_in_seconds">Saving in %1$d...</string>
+    <string name="device_admin_description">Enables full lockdown kiosk modes for the wedding photobooth.</string>
+</resources>
