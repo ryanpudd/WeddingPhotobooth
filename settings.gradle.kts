@@ -1,3 +1,6 @@
 rootProject.name = "WeddingPhotobooth"
+gradle.extra["uvccRoot"] = "C:/workspace/repos/github.com/saki4510t/UVCCamera"
+
 include(":app")
-// We will include the uvccamera module in a later task or configure it based on user feedback.
+// Can't do this as UVCCamera is too old
+//includeBuild("C:/workspace/repos/github.com/saki4510t/UVCCamera")

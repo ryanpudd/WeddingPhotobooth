@@ -14,28 +14,41 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent">
 
-    <!-- Overlay UI Text -->
-    <TextView
+        <com.serenegiant.widget.UVCCameraTextureView
+            android:id="@+id/camera_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
+
+    <!-- Overlay UI Text and Start Button -->
+    <Button
         android:id="@+id/statusOverlayText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textSize="48sp"
-        android:textColor="#FFFFFF"
+        android:layout_margin="32dp"
         android:text="@string/tap_to_take_photo"
-        app:layout_constraintTop_toTopOf="parent"
+        android:visibility="gone"
+        android:textAllCaps="false"
+        android:textSize="48sp"
+        android:background="@android:color/transparent"
+        android:textColor="#FFFFFF"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintTop_toTopOf="parent" />
 
     <Button
         android:id="@+id/btnKeep"
+
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/keep"
         android:visibility="gone"
         android:textSize="32sp"
+        android:background="@drawable/button_border"
+        android:textColor="#FFFFFF"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_margin="32dp"/>
@@ -47,6 +60,8 @@
         android:text="@string/retake"
         android:visibility="gone"
         android:textSize="32sp"
+        android:background="@drawable/button_border"
+        android:textColor="#FFFFFF"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         android:layout_margin="32dp"/>
