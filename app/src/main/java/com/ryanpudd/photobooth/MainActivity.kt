@@ -1,6 +1,10 @@
 package com.ryanpudd.photobooth
 
+import android.animation.Animator
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.os.Bundle
 import android.os.CountDownTimer
@@ -11,7 +15,11 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Surface
 import android.view.View
+import android.view.ViewAnimationUtils
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -24,6 +32,7 @@ import com.serenegiant.usb.UVCCamera
 import com.serenegiant.usbcameracommon.UVCCameraHandler
 import com.serenegiant.utils.HandlerThreadHandler
 import com.serenegiant.widget.CameraViewInterface
+import com.serenegiant.widget.UVCCameraTextureView
 import java.io.BufferedOutputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -38,10 +47,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private val PREVIEW_MODE: Int = UVCCamera.FRAME_FORMAT_MJPEG
 
+    private lateinit var stillImageView: ImageView
+    private lateinit var flashOverlay: View
     private lateinit var statusOverlayText: TextView
     private lateinit var btnKeep: Button
     private lateinit var btnRetake: Button
-    //private lateinit var btnStart: Button
+
+    private lateinit var cameraView: UVCCameraTextureView
 
     private var currentState = BoothState.IDLE
     private var reviewTimer: CountDownTimer? = null
@@ -108,7 +120,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mPreviewHeight = displayMetrics.heightPixels
 
         // Initialize the camera
-        mUVCCameraView = findViewById(R.id.camera_view) as CameraViewInterface
+        cameraView = findViewById(R.id.camera_view)
+        cameraView.scaleX = -1f // Mirror the preview
+
+        mUVCCameraView = cameraView as CameraViewInterface
         mUVCCameraView?.aspectRatio = mPreviewWidth / mPreviewHeight.toDouble()
 
         mUSBMonitor = USBMonitor(this, mOnDeviceConnectListener)
@@ -117,12 +132,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             2, mPreviewWidth, mPreviewHeight, PREVIEW_MODE);
         mCameraHandler?.setStoreOnCapture(false);
 
+        // Get UI elements
+        stillImageView = findViewById(R.id.stillImageView)
+        flashOverlay = findViewById(R.id.flashOverlay)
         statusOverlayText = findViewById(R.id.statusOverlayText)
         btnKeep = findViewById(R.id.btnKeep)
         btnRetake = findViewById(R.id.btnRetake)
 
-        btnKeep.setOnClickListener { storePhoto() }
-        btnRetake.setOnClickListener { startPreCaptureCountdown() }
+        btnKeep.setOnClickListener { handleKeep() }
+        btnRetake.setOnClickListener { handleRetake() }
         statusOverlayText.setOnClickListener {
             if (currentState == BoothState.IDLE) {
                 startPreCaptureCountdown()
@@ -158,25 +176,39 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private fun resetToIdle() {
         currentState = BoothState.IDLE
+        statusOverlayText.text = getString(R.string.tap_to_take_photo)
+        resetToCapture()
+    }
+
+    private fun resetToCapture() {
         reviewTimer?.cancel()
         preCaptureTimer?.cancel()
         mainHandler.removeCallbacks(captureRunnable)
-        statusOverlayText.text = getString(R.string.tap_to_take_photo)
         statusOverlayText.visibility = View.VISIBLE
         btnKeep.visibility = View.GONE
         btnRetake.visibility = View.GONE
 
-        startPreview()
+        stillImageView.visibility = View.INVISIBLE
+        stillImageView.setImageDrawable(null)
+        // Fix any transformations on stillImage
+        stillImageView.translationX = 0f
+        stillImageView.translationY = 0f
+        stillImageView.translationZ = 0f
+        stillImageView.rotation = 0f
+        stillImageView.scaleX = 1f
+        stillImageView.scaleY = 1f
+        stillImageView.alpha = 1f
+
+        cameraView.visibility = View.VISIBLE
+
+        mPreviewImage?.let {
+            if (!it.isRecycled) it.recycle()
+        }
+        mPreviewImage = null
     }
 
     private fun startPreCaptureCountdown() {
-        reviewTimer?.cancel()
-        preCaptureTimer?.cancel()
-        mainHandler.removeCallbacks(captureRunnable)
-        currentState = BoothState.COUNTDOWN_PRECAPTURE
-        btnKeep.visibility = View.GONE
-        btnRetake.visibility = View.GONE
-        statusOverlayText.visibility = View.VISIBLE
+        resetToCapture()
 
         preCaptureTimer = object : CountDownTimer(3000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
@@ -189,30 +221,21 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 statusOverlayText.text = getString(R.string.smile)
 
                 // Take the photo
-                mCameraHandler?.captureStill()
-                //takePhoto()
+                takePhoto()
+                //mCameraHandler?.captureStill()
 
                 // Trigger capture pipeline here
-                mainHandler.postDelayed(captureRunnable, 1000)
+                //mainHandler.postDelayed(captureRunnable, 100)
             }
         }.start()
     }
 
     private fun showReviewScreen() {
         currentState = BoothState.REVIEW
+
         statusOverlayText.visibility = View.VISIBLE
         btnKeep.visibility = View.VISIBLE
         btnRetake.visibility = View.VISIBLE
-
-        // Show the preview
-        mCameraHandler?.stopPreview()
-        val canvas = mSurface?.lockCanvas(null)
-
-        mPreviewImage = mCameraHandler?.getLastStillCapture()
-        if (mPreviewImage != null) {
-            canvas?.drawBitmap(mPreviewImage!!, 0f, 0f, null);
-            mSurface?.unlockCanvasAndPost(canvas)
-        }
 
         startReviewAutoAdvanceCountdown()
     }
@@ -229,9 +252,91 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.US)
 
             override fun onFinish() {
-                storePhoto()
+                handleKeep()
             }
         }.start()
+    }
+
+    private fun takePhoto() {
+        playFlash()
+        mCameraHandler!!.post {
+            try {
+                val source = mUVCCameraView!!.captureStillImage()
+                val matrix = Matrix().apply { preScale(-1f, 1f) }
+                val copy = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, false)
+                mainHandler.post {
+                    mPreviewImage = copy
+                    irisCloseThenReveal()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "takePhoto", e)
+            }
+        }
+    }
+
+    private fun playFlash() {
+        flashOverlay.animate()
+            .alpha(0.9f)
+            .setDuration(60)
+            .withEndAction {
+                flashOverlay.animate()
+                    .alpha(0f)
+                    .setDuration(200)
+                    .start()
+            }
+            .start()
+    }
+
+    private fun irisCloseThenReveal() {
+        val cx = mPreviewWidth / 2
+        val cy = mPreviewHeight / 2
+        val startRadius = kotlin.math.hypot(cx.toDouble(), cy.toDouble()).toFloat()
+
+        // Closing circle shrinks the visible camera view to nothing
+        val closeAnim = ViewAnimationUtils.createCircularReveal(cameraView, cx, cy, startRadius, 0f)
+        closeAnim.duration = 200
+        closeAnim.interpolator = AccelerateInterpolator()
+
+        closeAnim.addListener(object: Animator.AnimatorListener {
+            override fun onAnimationStart(p0: Animator) {}
+            override fun onAnimationRepeat(p0: Animator) {}
+            override fun onAnimationCancel(p0: Animator) {}
+
+            override fun onAnimationEnd(p0: Animator) {
+                cameraView.visibility = View.INVISIBLE
+                stillImageView.setImageBitmap(mPreviewImage)
+                stillImageView.visibility = View.VISIBLE
+
+                // opening circle reviews still
+                val openAnim =
+                    ViewAnimationUtils.createCircularReveal(stillImageView, cx, cy, 0f, startRadius)
+                openAnim.duration = 250
+                openAnim.interpolator = DecelerateInterpolator()
+                openAnim.addListener(object : Animator.AnimatorListener {
+                    override fun onAnimationStart(animation: Animator) {}
+                    override fun onAnimationEnd(animation: Animator) {
+                        showReviewScreen()
+                    }
+                    override fun onAnimationCancel(animation: Animator) {}
+                    override fun onAnimationRepeat(animation: Animator) {}
+                })
+                openAnim.start()
+            }
+        })
+        closeAnim.start()
+    }
+
+    private fun handleKeep() {
+        animateSaveAndExit {
+            storePhoto()
+            resetToIdle()
+        }
+    }
+
+    private fun handleRetake() {
+        animateRetakeToTrash {
+            startPreCaptureCountdown()
+        }
     }
 
     private fun storePhoto() {
@@ -252,8 +357,98 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         } catch (e: Exception) {
             // TODO - Report error
         }
+    }
 
-        resetToIdle()
+    private fun animateSaveAndExit(onComplete: () -> Unit) {
+        val screenWidth = (stillImageView.parent as View).width
+
+        val translateX = ObjectAnimator.ofFloat(
+            stillImageView, View.TRANSLATION_X, 0f, screenWidth.toFloat() * 1.2f
+        )
+        val translateY = ObjectAnimator.ofFloat(
+            stillImageView, View.TRANSLATION_Y, 0f, -80f
+        )
+        val rotate = ObjectAnimator.ofFloat(
+            stillImageView, View.ROTATION, 0f, 15f
+        )
+        val scale = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(stillImageView, View.SCALE_X, 1f, 0.6f),
+                ObjectAnimator.ofFloat(stillImageView, View.SCALE_Y, 1f, 0.6f)
+            )
+        }
+
+        val flyOut = AnimatorSet().apply {
+            playTogether(translateX, translateY, rotate, scale)
+            duration = 450
+            interpolator = AccelerateInterpolator()
+        }
+
+        flyOut.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) {}
+            override fun onAnimationEnd(animation: Animator) {
+                onComplete()
+            }
+            override fun onAnimationCancel(animation: Animator) {}
+            override fun onAnimationRepeat(animation: Animator) {}
+        })
+
+        flyOut.start()
+    }
+
+    private fun animateRetakeToTrash(onComplete: () -> Unit) {
+        val parentHeight = (stillImageView.parent as View).height
+        val parentWidth = (stillImageView.parent as View).width
+
+        // Hop 1: tumble toward bottom-left
+        val hop1 = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(stillImageView, View.TRANSLATION_X, 0f, -parentWidth * 0.25f),
+                ObjectAnimator.ofFloat(stillImageView, View.TRANSLATION_Y, 0f, parentHeight * 0.3f),
+                ObjectAnimator.ofFloat(stillImageView, View.ROTATION, 0f, -25f)
+            )
+            duration = 220
+            interpolator = AccelerateInterpolator()
+        }
+
+        // Hop 2: tumble toward bottom-right, lower than hop1
+        val hop2 = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(stillImageView, View.TRANSLATION_X, -parentWidth * 0.25f, parentWidth * 0.2f),
+                ObjectAnimator.ofFloat(stillImageView, View.TRANSLATION_Y, parentHeight * 0.3f, parentHeight * 0.65f),
+                ObjectAnimator.ofFloat(stillImageView, View.ROTATION, -25f, 20f)
+            )
+            duration = 220
+            interpolator = AccelerateInterpolator()
+        }
+
+        // Final drop: straight down and off, shrinking + fading like it's landing in the bin
+        val finalDrop = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(stillImageView, View.TRANSLATION_Y, parentHeight * 0.65f, parentHeight.toFloat() * 1.1f),
+                ObjectAnimator.ofFloat(stillImageView, View.ROTATION, 20f, 35f),
+                ObjectAnimator.ofFloat(stillImageView, View.SCALE_X, 1f, 0.4f),
+                ObjectAnimator.ofFloat(stillImageView, View.SCALE_Y, 1f, 0.4f),
+                ObjectAnimator.ofFloat(stillImageView, View.ALPHA, 1f, 0f)
+            )
+            duration = 280
+            interpolator = AccelerateInterpolator()
+        }
+
+        val fullSequence = AnimatorSet().apply {
+            playSequentially(hop1, hop2, finalDrop)
+        }
+
+        fullSequence.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) {}
+            override fun onAnimationEnd(animation: Animator) {
+                onComplete()
+            }
+            override fun onAnimationCancel(animation: Animator) {}
+            override fun onAnimationRepeat(animation: Animator) {}
+        })
+
+        fullSequence.start()
     }
 
 
@@ -266,18 +461,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
         mSurface = Surface(st)
         mCameraHandler!!.startPreview(mSurface)
-//        runOnUiThread(object : Runnable {
-//            override fun run() {
-//                // TODO - If we disable, we need to enable here
-//                //mCaptureButton.setVisibility(View.VISIBLE)
-//            }
-//        })
+
+        runOnUiThread { resetToIdle() }
     }
 
     private val mOnDeviceConnectListener: OnDeviceConnectListener =
         object : OnDeviceConnectListener {
             override fun onAttach(device: UsbDevice?) {
-                Toast.makeText(this@MainActivity, "USB_DEVICE_ATTACHED", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Camera Connected", Toast.LENGTH_SHORT).show()
                 mUSBMonitor!!.requestPermission(device)
             }
 
@@ -288,11 +479,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             ) {
                 //if (MainActivity.DEBUG) Log.v(MainActivity.TAG, "onConnect:")
                 mCameraHandler!!.open(ctrlBlock)
-                runOnUiThread(object : Runnable {
-                    override fun run() {
-                        resetToIdle()
-                    }
-                })
+                startPreview()
             }
 
             override fun onDisconnect(device: UsbDevice?, ctrlBlock: UsbControlBlock?) {
@@ -305,7 +492,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             }
 
             override fun onDettach(device: UsbDevice?) {
-                Toast.makeText(this@MainActivity, "USB_DEVICE_DETACHED", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Camera Disconnected", Toast.LENGTH_SHORT).show()
             }
 
             override fun onCancel(device: UsbDevice?) {
