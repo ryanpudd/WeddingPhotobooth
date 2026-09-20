@@ -1,6 +1,7 @@
 package com.ryanpudd.photobooth
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -118,5 +119,21 @@ class UploadQueueManagerTest {
         assertTrue(!file.exists())
         assertEquals("IMG_c__u5.jpg", moved.name)
         assertEquals(failed, moved.parentFile)
+    }
+
+    @Test
+    fun nextAvailableFile_normalMode_hasNoDemoPrefix() {
+        val dir = tempFolder.newFolder("pending")
+        val file = UploadQueueManager.nextAvailableFile(dir, demo = false)
+        assertTrue(file.name.startsWith("IMG_"))
+        assertFalse(UploadQueueManager.isDemoFile(file.name))
+    }
+
+    @Test
+    fun nextAvailableFile_demoMode_isMarkedAsDemo() {
+        val dir = tempFolder.newFolder("pending")
+        val file = UploadQueueManager.nextAvailableFile(dir, demo = true)
+        assertTrue(file.name.startsWith("DEMO_IMG_"))
+        assertTrue(UploadQueueManager.isDemoFile(file.name))
     }
 }

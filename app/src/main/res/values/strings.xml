@@ -35,4 +35,6 @@
     <string name="toast_test_alert_sent">Test alert queued</string>
     <string name="toast_no_webhook">No Discord webhook configured</string>
     <string name="fault_battery_swap">Booth needs a battery swap, find someone to help</string>
+    <string name="label_demo_mode">Demo mode (auto-capture every minute)</string>
+    <string name="demo_mode_banner">DEMO MODE</string>
 </resources>

@@ -14,6 +14,7 @@ import java.util.Locale
  */
 object UploadQueueManager {
     const val MAX_ATTEMPTS = 5
+    const val DEMO_PREFIX = "DEMO_"
     private val BACKOFF_MS = longArrayOf(30_000, 60_000, 120_000, 300_000) // index = attempt-1, attempts 1..4
 
     private const val RETRY_DIR_NAME = ".upload_retry"
@@ -29,12 +30,16 @@ object UploadQueueManager {
 
     fun failedDir(context: Context): File = File(pendingDir(context), FAILED_DIR_NAME)
 
-    /** Collision-safe IMG_yyyyMMdd_HHmmss_NNN.jpg name inside [dir]. */
-    fun nextAvailableFile(dir: File, timestamp: Date = Date()): File {
+    /** True when [fileName] came from a demo-mode capture. */
+    fun isDemoFile(fileName: String): Boolean = fileName.startsWith(DEMO_PREFIX)
+
+    /** Collision-safe [DEMO_]IMG_yyyyMMdd_HHmmss_NNN.jpg name inside [dir]. */
+    fun nextAvailableFile(dir: File, timestamp: Date = Date(), demo: Boolean = false): File {
         val stamp = FILENAME_DATE_FORMAT.format(timestamp)
+        val prefix = if (demo) DEMO_PREFIX else ""
         var counter = 1
         while (true) {
-            val candidate = File(dir, "IMG_%s_%03d.jpg".format(stamp, counter))
+            val candidate = File(dir, "%sIMG_%s_%03d.jpg".format(prefix, stamp, counter))
             if (!candidate.exists()) return candidate
             counter++
         }

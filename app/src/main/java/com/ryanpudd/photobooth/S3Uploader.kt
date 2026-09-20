@@ -25,7 +25,7 @@ class S3Uploader(private val config: CredentialsStore.S3Config) {
             val s3 = AmazonS3Client(credentials, clientConfig).apply {
                 setRegion(Region.getRegion(Regions.fromName(config.region)))
             }
-            val key = if (config.keyPrefix.isBlank()) file.name else "${config.keyPrefix.trimEnd('/')}/${file.name}"
+            val key = S3KeyBuilder.buildKey(config.keyPrefix, file.name)
             s3.putObject(config.bucket, key, file)
             UploadResult.Success
         } catch (e: Exception) {

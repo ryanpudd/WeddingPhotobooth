@@ -24,6 +24,7 @@ import android.view.ViewAnimationUtils
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -77,6 +78,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private lateinit var btnRetake: Button
     private lateinit var btnAdminGear: ImageButton
     private lateinit var faultOverlay: TextView
+    private lateinit var demoBanner: TextView
+
+    // Ruling 8: tracks whichever admin dialog (PIN entry or settings, including
+    // the diagnostics report shown on top of settings) is currently up, so the
+    // demo auto-capture runnable can skip its countdown instead of firing behind
+    // it. AlertDialog.isShowing reflects dismiss/cancel automatically, so this
+    // only needs to be set on show - never cleared by hand.
+    private var adminDialog: AlertDialog? = null
 
     private val cameraAlertState = CameraAlertState()
 
@@ -127,6 +136,23 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
     }
 
+    // Ruling 8: currentState == IDLE alone isn't enough here — showAdminPinDialog()
+    // calls resetToIdle(), so the booth sits at IDLE the whole time an admin dialog
+    // is open. adminDialog?.isShowing guards against starting a countdown behind it.
+    // The reschedule below stays unconditional so capture resumes once the dialog closes.
+    private val demoCaptureRunnable = object : Runnable {
+        override fun run() {
+            if (isDemoModeEnabled() &&
+                currentState == BoothState.IDLE &&
+                adminDialog?.isShowing != true &&
+                mCameraHandler?.isPreviewing == true
+            ) {
+                startPreCaptureCountdown()
+            }
+            mainHandler.postDelayed(this, DEMO_CAPTURE_INTERVAL_MS)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         preCaptureTimer?.cancel()
@@ -134,6 +160,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(captureRunnable)
         mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(gearHideRunnable)
+        mainHandler.removeCallbacks(demoCaptureRunnable)
         // The USB alert wiring posts anonymous lambdas (onConnect/onDisconnect/onDettach)
         // that can't be removed by reference above. mUSBMonitor is never unregistered, so
         // one could still be queued here; drop everything before the executor beneath
@@ -195,6 +222,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // guest actually sees is driven from the tested AlertMessages constant so the two
         // can't silently drift apart.
         faultOverlay.text = AlertMessages.FAULT_SCREEN_TEXT
+        demoBanner = findViewById(R.id.demoBanner)
+        syncDemoBanner()
+        mainHandler.postDelayed(demoCaptureRunnable, DEMO_CAPTURE_INTERVAL_MS)
 
         btnKeep.setOnClickListener { handleKeep() }
         btnRetake.setOnClickListener { handleRetake() }
@@ -240,6 +270,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or View.SYSTEM_UI_FLAG_FULLSCREEN)
+    }
+
+    fun isDemoModeEnabled(): Boolean = DemoModeStore.isEnabled(this)
+
+    private fun syncDemoBanner() {
+        demoBanner.visibility = if (isDemoModeEnabled()) View.VISIBLE else View.GONE
     }
 
     private fun resetToIdle() {
@@ -418,7 +454,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 Toast.makeText(this, R.string.storage_low_warning, Toast.LENGTH_LONG).show()
             }
 
-            val finalFile = UploadQueueManager.nextAvailableFile(pendingDir)
+            val finalFile = UploadQueueManager.nextAvailableFile(pendingDir, demo = isDemoModeEnabled())
             val tempFile = File(pendingDir, "${finalFile.name}.tmp")
 
             BufferedOutputStream(FileOutputStream(tempFile)).use { os ->
@@ -465,6 +501,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.submit, null)
             .create()
+        adminDialog = dialog
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -525,7 +562,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 .show()
         }
 
-        AlertDialog.Builder(this)
+        val checkDemoMode = view.findViewById<CheckBox>(R.id.checkDemoMode)
+        checkDemoMode.isChecked = isDemoModeEnabled()
+
+        adminDialog = AlertDialog.Builder(this)
             .setTitle(R.string.admin_settings_title)
             .setView(view)
             .setNegativeButton(R.string.cancel, null)
@@ -554,6 +594,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     }
                     AlertSettingsStore.saveWebhookUrl(this, webhookInput)
                 }
+
+                DemoModeStore.setEnabled(this, checkDemoMode.isChecked)
+                syncDemoBanner()
 
                 CredentialsStore.save(
                     this,
@@ -611,11 +654,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 }
                 AlertEffect.HIDE_FAULT_SCREEN -> faultOverlay.visibility = View.GONE
                 AlertEffect.SEND_DISCONNECT_ALERT ->
-                    // TODO(Task 7): replace literal `false` with isDemoModeEnabled().
-                    discordNotifier.send(AlertMessages.disconnect(false), mentionEveryone = true)
+                    discordNotifier.send(AlertMessages.disconnect(isDemoModeEnabled()), mentionEveryone = true)
                 AlertEffect.SEND_ALL_CLEAR ->
-                    // TODO(Task 7): replace literal `false` with isDemoModeEnabled().
-                    discordNotifier.send(AlertMessages.allClear(false), mentionEveryone = false)
+                    discordNotifier.send(AlertMessages.allClear(isDemoModeEnabled()), mentionEveryone = false)
             }
         }
     }
@@ -849,5 +890,6 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     companion object {
         private const val MAX_RECENT_CAMERA_ERRORS = 5
+        private const val DEMO_CAPTURE_INTERVAL_MS = 60_000L
     }
 }
