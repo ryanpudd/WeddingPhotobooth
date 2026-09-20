@@ -21,8 +21,16 @@ class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
 
     /** Queues a send on the background executor. Never throws, never blocks the caller. */
     fun send(content: String, mentionEveryone: Boolean) {
-        val url = webhookUrlProvider() ?: return
-        if (!DiscordPayload.isValidWebhookUrl(url)) return
+        val url = webhookUrlProvider()
+        if (url == null) {
+            // The most likely failure of all, and previously the only silent one.
+            Log.w(TAG, "Discord send skipped: no webhook URL configured (or it could not be read)")
+            return
+        }
+        if (!DiscordPayload.isValidWebhookUrl(url)) {
+            Log.w(TAG, "Discord send skipped: stored webhook URL is not a valid Discord webhook")
+            return
+        }
         executor.execute {
             runCatching { sendBlocking(url, content, mentionEveryone) }
                 .onSuccess { code ->
@@ -30,7 +38,9 @@ class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
                         Log.w(TAG, "Discord webhook responded with non-success status $code")
                     }
                 }
-                .onFailure { Log.w(TAG, "Discord send failed", it) }
+                // Never log the throwable itself: some IOException subclasses put the full
+                // request URL — which contains the webhook secret — in getMessage().
+                .onFailure { Log.w(TAG, "Discord send failed: ${it.javaClass.simpleName}: ${redact(it.message)}") }
         }
     }
 
@@ -57,8 +67,22 @@ class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
         executor.shutdownNow()
     }
 
+    /**
+     * Exception messages from the HTTP stack routinely echo the request URL, and the
+     * webhook URL's last path segment is a bearer token. Strip anything URL-shaped
+     * before it reaches logcat.
+     */
+    private fun redact(message: String?): String {
+        if (message.isNullOrBlank()) return "(no message)"
+        return URL_PATTERN.replace(message, "<redacted-url>")
+            .let { WEBHOOK_PATH_PATTERN.replace(it, "/api/webhooks/<redacted>") }
+    }
+
     companion object {
         private const val TAG = "DiscordNotifier"
+        private val URL_PATTERN = Regex("""\bhttps?://\S+""", RegexOption.IGNORE_CASE)
+        /** Catches a scheme-less "discord.com/api/webhooks/<id>/<token>" too. */
+        private val WEBHOOK_PATH_PATTERN = Regex("""/api/webhooks/\S*""", RegexOption.IGNORE_CASE)
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 10_000
     }

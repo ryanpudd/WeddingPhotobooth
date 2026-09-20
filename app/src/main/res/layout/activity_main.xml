@@ -143,12 +143,15 @@
         android:id="@+id/demoBanner"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_margin="12dp"
         android:background="#CCAA0000"
         android:padding="8dp"
         android:text="@string/demo_mode_banner"
         android:textColor="#FFFFFF"
         android:textSize="16sp"
         android:textStyle="bold"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

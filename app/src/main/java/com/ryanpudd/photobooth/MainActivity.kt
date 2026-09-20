@@ -51,6 +51,10 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
 
 enum class BoothState {
+    // COUNTDOWN_PRECAPTURE is documentation-only: it is never assigned. currentState
+    // deliberately stays IDLE through the pre-capture countdown, because resetToCapture()
+    // does not clear currentState — assigning it here would risk leaving the booth wedged
+    // in a state nothing returns it from. Kept as a named description of the phase.
     IDLE, COUNTDOWN_PRECAPTURE, CAPTURING, REVIEW
 }
 
@@ -93,6 +97,34 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private lateinit var uploadWorker: UploadWorker
     private val gearHideRunnable = Runnable { btnAdminGear.visibility = View.GONE }
 
+    // C1 / spec R4: admin must be reachable from ANY state, above all from the wedged one.
+    // faultOverlay is match_parent and the last child of the ConstraintLayout, so it receives
+    // touches first and View.onTouchEvent consumes them — the root's long-click would never
+    // run while the fault screen is up. This same listener is therefore attached to BOTH
+    // rootLayout and faultOverlay. bringToFront() is required as well: btnAdminGear is declared
+    // before faultOverlay in the layout, so without it the revealed gear draws underneath the
+    // overlay and cannot be tapped. Only the LONG press is handled here; a short tap on the
+    // overlay is still swallowed by its clickable="true", so no countdown starts on a dead camera.
+    private val revealGear = View.OnLongClickListener {
+        btnAdminGear.visibility = View.VISIBLE
+        btnAdminGear.bringToFront()
+        mainHandler.removeCallbacks(gearHideRunnable)
+        mainHandler.postDelayed(gearHideRunnable, GEAR_VISIBLE_MS)
+        true
+    }
+
+    // I1: a cold start while the camera is already gone produces no onDisconnect/onDettach —
+    // there is no device to disconnect — so nothing would ever alert. This is a ONE-SHOT
+    // check, not a watchdog: a normal onConnect has already driven onCameraBack by the time
+    // it runs, making it a no-op in the healthy case. A repeating health check is explicitly
+    // out of scope (spec line 95).
+    private val startupCameraCheckRunnable = Runnable {
+        if (mCameraHandler?.isPreviewing != true) {
+            Log.w(TAG, "startup camera check: no preview after ${STARTUP_CAMERA_CHECK_DELAY_MS}ms")
+            applyAlertEffects(cameraAlertState.onCameraLost(SystemClock.elapsedRealtime()))
+        }
+    }
+
     private lateinit var cameraView: UVCCameraTextureView
 
     private var currentState = BoothState.IDLE
@@ -105,7 +137,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var lastTouchElapsedMs = SystemClock.elapsedRealtime()
     private var appliedBrightness = -1f
 
-    private val discordNotifier = DiscordNotifier { AlertSettingsStore.loadWebhookUrl(this) }
+    // I3: loadWebhookUrl goes through EncryptedSharedPreferences/MasterKeys, which can throw
+    // on a corrupted keyset or a restore onto new hardware. This provider is called from the
+    // alert path (heartbeat -> applyAlertEffects -> SEND_DISCONNECT_ALERT) on the main thread,
+    // so an uncaught throw would kill the app during the very outage it is reporting.
+    private val discordNotifier = DiscordNotifier {
+        runCatching { AlertSettingsStore.loadWebhookUrl(this) }.getOrNull()
+    }
 
     private val recentCameraErrors = ConcurrentLinkedQueue<String>()
     private val appStartedElapsedMs = SystemClock.elapsedRealtime()
@@ -169,6 +207,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(gearHideRunnable)
         mainHandler.removeCallbacks(demoCaptureRunnable)
+        mainHandler.removeCallbacks(startupCameraCheckRunnable)
         // The USB alert wiring posts anonymous lambdas (onConnect/onDisconnect/onDettach)
         // that can't be removed by reference above. mUSBMonitor is never unregistered, so
         // one could still be queued here; drop everything before the executor beneath
@@ -182,7 +221,6 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        applyBrightness()
 
         // TODO: Should be in base class
         // ワーカースレッドを生成
@@ -233,6 +271,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         faultOverlay.text = AlertMessages.FAULT_SCREEN_TEXT
         demoBanner = findViewById(R.id.demoBanner)
         syncDemoBanner()
+        // Must run after the views above are bound: applyBrightness() now reads
+        // faultOverlay.visibility (M2), which is lateinit until findViewById above.
+        applyBrightness()
         mainHandler.postDelayed(demoCaptureRunnable, DEMO_CAPTURE_INTERVAL_MS)
 
         btnKeep.setOnClickListener { handleKeep() }
@@ -246,12 +287,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         val rootLayout = findViewById<View>(R.id.rootLayout)
         // Deliberately NOT gated on BoothState.IDLE: a camera failure can park the
         // app in CAPTURING or REVIEW, and that is exactly when diagnostics are needed.
-        rootLayout.setOnLongClickListener {
-            btnAdminGear.visibility = View.VISIBLE
-            mainHandler.removeCallbacks(gearHideRunnable)
-            mainHandler.postDelayed(gearHideRunnable, 8000)
-            true
-        }
+        // Attached to the fault overlay too — see revealGear for why the root listener
+        // alone is not enough once the overlay is up.
+        rootLayout.setOnLongClickListener(revealGear)
+        faultOverlay.setOnLongClickListener(revealGear)
         btnAdminGear.setOnClickListener { showAdminPinDialog() }
     }
 
@@ -263,6 +302,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 mUVCCamera!!.startPreview()
             }
         }
+        // onStart can run more than once for this Activity, so drop any pending copy
+        // first — the check must never be scheduled twice.
+        mainHandler.removeCallbacks(startupCameraCheckRunnable)
+        mainHandler.postDelayed(startupCameraCheckRunnable, STARTUP_CAMERA_CHECK_DELAY_MS)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        mainHandler.removeCallbacks(startupCameraCheckRunnable)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -304,9 +352,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
      * system-wide, and Android restores it if the app loses focus or dies.
      */
     private fun applyBrightness() {
+        // M2: the fault screen is the spec's PRIMARY alert channel ("the screen carries it").
+        // SHOW_FAULT_SCREEN pins currentState to IDLE, so without the overlay check the booth
+        // would dim its own emergency message to 30% after 30s of nobody touching it — which is
+        // exactly what happens during a real outage.
         val target = BrightnessPolicy.brightnessFor(
             demoMode = isDemoModeEnabled(),
-            isIdle = currentState == BoothState.IDLE,
+            isIdle = currentState == BoothState.IDLE && faultOverlay.visibility != View.VISIBLE,
             msSinceLastTouch = SystemClock.elapsedRealtime() - lastTouchElapsedMs
         )
         if (target == appliedBrightness) return
@@ -405,6 +457,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 val matrix = Matrix().apply { preScale(-1f, 1f) }
                 val copy = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, false)
                 mainHandler.post {
+                    // M4: the camera can die between this post to the camera worker and the
+                    // callback landing on the main thread. By then SHOW_FAULT_SCREEN has already
+                    // run resetToIdle(); carrying on would drive the review screen up behind the
+                    // fault overlay and let the 8s auto-advance upload a garbage frame.
+                    if (cameraAlertState.phase != CameraAlertState.Phase.HEALTHY) {
+                        Log.w(TAG, "takePhoto: camera lost mid-capture, dropping frame")
+                        return@post
+                    }
                     mPreviewImage = copy
                     irisCloseThenReveal()
                 }
@@ -571,12 +631,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             inputSecretKey.hint = getString(R.string.hint_secret_unchanged)
         }
 
-        if (AlertSettingsStore.hasWebhookUrl(this)) {
+        // I3: the keystore behind AlertSettingsStore can throw on a corrupted keyset or a
+        // restore onto new hardware. Treat that as "no webhook configured" rather than
+        // crashing the admin screen.
+        if (runCatching { AlertSettingsStore.hasWebhookUrl(this) }.getOrDefault(false)) {
             inputWebhookUrl.hint = getString(R.string.hint_webhook_unchanged)
         }
 
         btnSendTestAlert.setOnClickListener {
-            if (AlertSettingsStore.hasWebhookUrl(this)) {
+            if (runCatching { AlertSettingsStore.hasWebhookUrl(this) }.getOrDefault(false)) {
                 discordNotifier.send(
                     "✅ **Photobooth test alert** — if you can see this, alerts are working.",
                     mentionEveryone = true
@@ -617,6 +680,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     secretInput
                 }
 
+                // M6: written before the credentials validation below, which short-circuits
+                // with return@setPositiveButton. On a partly configured booth the demo toggle
+                // would otherwise silently refuse to persist.
+                DemoModeStore.setEnabled(this, checkDemoMode.isChecked)
+                syncDemoBanner()
+
                 if (accessKeyId.isBlank() || secretKey.isBlank() || bucket.isBlank() || region.isBlank()) {
                     Toast.makeText(this, R.string.admin_settings_incomplete, Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
@@ -630,9 +699,6 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     }
                     AlertSettingsStore.saveWebhookUrl(this, webhookInput)
                 }
-
-                DemoModeStore.setEnabled(this, checkDemoMode.isChecked)
-                syncDemoBanner()
 
                 CredentialsStore.save(
                     this,
@@ -857,8 +923,26 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 startPreview()
                 // USBMonitor delivers onConnect on its own async handler thread, not the
                 // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
-                val nowMs = SystemClock.elapsedRealtime()
-                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraBack(nowMs)) }
+                //
+                // I2: onConnect is the event, not evidence that the preview actually came up —
+                // spec R7 documents an undiagnosed stall specifically on start/reconnect. Firing
+                // onCameraBack here would hide the fault screen and post "back up" while the booth
+                // is still frozen, turning back the person walking over to fix it. So the check is
+                // deferred past the same delay startPreview() already uses for calibration (plus a
+                // margin) and gated on isPreviewing. If the preview did not come up, the overlay
+                // stays and nothing is sent. nowMs is read when the check runs, so the debounce
+                // arithmetic reflects when recovery was confirmed.
+                mainHandler.postDelayed({
+                    if (mCameraHandler?.isPreviewing == true) {
+                        applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
+                    } else {
+                        Log.w(TAG, "onConnect: preview not up after reconnect; holding fault screen")
+                        recordCameraError(
+                            "reconnect without preview at uptime " +
+                                "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
+                        )
+                    }
+                }, CAMERA_CALIBRATION_DELAY_MS + RECONNECT_CONFIRM_MARGIN_MS)
             }
 
             override fun onDisconnect(device: UsbDevice?, ctrlBlock: UsbControlBlock?) {
@@ -927,5 +1011,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     companion object {
         private const val MAX_RECENT_CAMERA_ERRORS = 5
         private const val DEMO_CAPTURE_INTERVAL_MS = 60_000L
+        private const val GEAR_VISIBLE_MS = 8_000L
+        /** One-shot grace period for the camera to come up from cold before we call it lost. */
+        private const val STARTUP_CAMERA_CHECK_DELAY_MS = 15_000L
+        /** Slack on top of CAMERA_CALIBRATION_DELAY_MS before a reconnect counts as confirmed. */
+        private const val RECONNECT_CONFIRM_MARGIN_MS = 700L
     }
 }
