@@ -3,15 +3,19 @@ package com.ryanpudd.photobooth
 import android.animation.Animator
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.media.ExifInterface
+import android.os.BatteryManager
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Surface
@@ -42,6 +46,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.ConcurrentLinkedQueue
 
 enum class BoothState {
     IDLE, COUNTDOWN_PRECAPTURE, CAPTURING, REVIEW
@@ -82,6 +87,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var preCaptureTimer: CountDownTimer? = null
 
     private val discordNotifier = DiscordNotifier { AlertSettingsStore.loadWebhookUrl(this) }
+
+    private val recentCameraErrors = ConcurrentLinkedQueue<String>()
+    private val appStartedElapsedMs = SystemClock.elapsedRealtime()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val captureRunnable = Runnable { showReviewScreen() }
@@ -180,15 +188,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
 
         val rootLayout = findViewById<View>(R.id.rootLayout)
+        // Deliberately NOT gated on BoothState.IDLE: a camera failure can park the
+        // app in CAPTURING or REVIEW, and that is exactly when diagnostics are needed.
         rootLayout.setOnLongClickListener {
-            if (currentState == BoothState.IDLE) {
-                btnAdminGear.visibility = View.VISIBLE
-                mainHandler.removeCallbacks(gearHideRunnable)
-                mainHandler.postDelayed(gearHideRunnable, 8000)
-                true
-            } else {
-                false
-            }
+            btnAdminGear.visibility = View.VISIBLE
+            mainHandler.removeCallbacks(gearHideRunnable)
+            mainHandler.postDelayed(gearHideRunnable, 8000)
+            true
         }
         btnAdminGear.setOnClickListener { showAdminPinDialog() }
     }
@@ -486,6 +492,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             }
         }
 
+        val btnSendDiagnostics = view.findViewById<Button>(R.id.btnSendDiagnostics)
+        btnSendDiagnostics.setOnClickListener {
+            val report = BoothDiagnostics.format(collectDiagnostics())
+            discordNotifier.send(report, mentionEveryone = false)
+            AlertDialog.Builder(this)
+                .setTitle(R.string.btn_send_diagnostics)
+                .setMessage(report)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+        }
+
         AlertDialog.Builder(this)
             .setTitle(R.string.admin_settings_title)
             .setView(view)
@@ -523,6 +540,38 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 uploadWorker.kickNow()
             }
             .show()
+    }
+
+    private fun collectDiagnostics(): DiagnosticsSnapshot {
+        val device: UsbDevice? = runCatching { mUSBMonitor?.deviceList?.firstOrNull() }.getOrNull()
+        val batteryIntent = runCatching {
+            registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        }.getOrNull()
+
+        return DiagnosticsSnapshot(
+            boothState = currentState.name,
+            cameraOpened = runCatching { mCameraHandler?.isOpened == true }.getOrDefault(false),
+            cameraPreviewing = runCatching { mCameraHandler?.isPreviewing == true }.getOrDefault(false),
+            usbDeviceAttached = device != null,
+            usbPermissionGranted = device != null &&
+                runCatching { mUSBMonitor?.hasPermission(device) == true }.getOrDefault(false),
+            deviceName = device?.deviceName,
+            vendorId = device?.vendorId,
+            productId = device?.productId,
+            // TODO(Task 6): replace with cameraAlertState.phase.name once that field exists.
+            alertPhase = "UNWIRED",
+            batteryLevelPercent = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1,
+            batteryPluggedRaw = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1,
+            appUptimeMs = SystemClock.elapsedRealtime() - appStartedElapsedMs,
+            lastCameraErrors = recentCameraErrors.toList()
+        )
+    }
+
+    private fun recordCameraError(message: String) {
+        recentCameraErrors.add(message)
+        while (recentCameraErrors.size > MAX_RECENT_CAMERA_ERRORS) {
+            recentCameraErrors.poll()
+        }
     }
 
     private fun animateSaveAndExit(onComplete: () -> Unit) {
@@ -736,5 +785,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         } catch (e: java.lang.Exception) {
             // ignore
         }
+    }
+
+    companion object {
+        private const val MAX_RECENT_CAMERA_ERRORS = 5
     }
 }
