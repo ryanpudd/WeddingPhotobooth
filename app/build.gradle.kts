@@ -48,6 +48,12 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
 
+    // S3 background upload + encrypted on-device credential storage
+    implementation("com.amazonaws:aws-android-sdk-s3:2.81.1")
+    implementation("androidx.security:security-crypto:1.0.0")
+
+    testImplementation("junit:junit:4.13.2")
+
     // libuvccamera
     debugImplementation(files("$uvccRoot/libuvccamera/build/outputs/aar/libuvccamera-debug.aar"))
     releaseImplementation(files("$uvccRoot/libuvccamera/build/outputs/aar/libuvccamera-release.aar"))

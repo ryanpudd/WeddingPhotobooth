@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Wedding Photobooth upload target: a private S3 bucket, an IAM user scoped
+  to write-only access for generating the access key the tablet app's admin
+  settings screen needs, and a second IAM user scoped to read-only access
+  for browsing/downloading the photos afterward.
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ryanpudd-weddingphotos
+    Description: Globally-unique S3 bucket name the photobooth app uploads photos to.
+
+  UploaderUserName:
+    Type: String
+    Default: wedding-photobooth-uploader
+    Description: Name of the IAM user whose access key the app will use.
+
+  ObjectKeyPrefix:
+    Type: String
+    Default: ""
+    Description: >
+      Optional key prefix (folder) to restrict the uploader's write access to,
+      matching the "S3 Key Prefix" field on the app's admin settings screen.
+      Leave blank to allow writes anywhere in the bucket. Also scopes the
+      read-only user's list/get access to the same prefix.
+
+  ReadOnlyUserName:
+    Type: String
+    Default: wedding-photobooth-readonly
+    Description: Name of the IAM user whose access key can list/download (but not upload or delete) the photos.
+
+Conditions:
+  HasKeyPrefix: !Not [!Equals [!Ref ObjectKeyPrefix, ""]]
+
+Resources:
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Project
+          Value: WeddingPhotobooth
+
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt PhotoBucket.Arn
+              - !Sub "${PhotoBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # Access keys can only be issued to an IAM user (not a role), since the app
+  # authenticates with a long-lived static key/secret rather than assuming a
+  # role via STS. This user has no console access and no permissions beyond
+  # writing objects into this one bucket.
+  UploaderUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref UploaderUserName
+      Tags:
+        - Key: Project
+          Value: WeddingPhotobooth
+
+  UploaderPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: WeddingPhotoboothUploadOnly
+      Users:
+        - !Ref UploaderUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: WriteObjectsOnly
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:AbortMultipartUpload
+            Resource:
+              !If
+                - HasKeyPrefix
+                - !Sub "${PhotoBucket.Arn}/${ObjectKeyPrefix}/*"
+                - !Sub "${PhotoBucket.Arn}/*"
+
+  # Second IAM user, separate from the uploader, with its own access key -
+  # so read-only access (e.g. for browsing/downloading photos afterward) can
+  # be handed out and revoked independently of the app's upload credentials.
+  ReadOnlyUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref ReadOnlyUserName
+      Tags:
+        - Key: Project
+          Value: WeddingPhotobooth
+
+  ReadOnlyPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: WeddingPhotoboothReadOnly
+      Users:
+        - !Ref ReadOnlyUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListBucketContents
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt PhotoBucket.Arn
+            Condition:
+              !If
+                - HasKeyPrefix
+                - StringLike:
+                    s3:prefix: !Sub "${ObjectKeyPrefix}/*"
+                - !Ref "AWS::NoValue"
+          - Sid: ReadObjects
+            Effect: Allow
+            Action: s3:GetObject
+            Resource:
+              !If
+                - HasKeyPrefix
+                - !Sub "${PhotoBucket.Arn}/${ObjectKeyPrefix}/*"
+                - !Sub "${PhotoBucket.Arn}/*"
+
+Outputs:
+  BucketName:
+    Description: Bucket name to enter on the app's admin settings screen.
+    Value: !Ref PhotoBucket
+
+  BucketRegion:
+    Description: Region to enter on the app's admin settings screen.
+    Value: !Ref "AWS::Region"
+
+  UploaderUserName:
+    Description: >
+      IAM user to create the access key for (aws iam create-access-key
+      --user-name <this>). Not created by this stack on purpose - see README.
+    Value: !Ref UploaderUser
+
+  UploaderUserArn:
+    Value: !GetAtt UploaderUser.Arn
+
+  ReadOnlyUserName:
+    Description: >
+      IAM user to create the access key for (aws iam create-access-key
+      --user-name <this>) for read-only access to the photos.
+    Value: !Ref ReadOnlyUser
+
+  ReadOnlyUserArn:
+    Value: !GetAtt ReadOnlyUser.Arn

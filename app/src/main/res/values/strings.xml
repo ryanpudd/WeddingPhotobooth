@@ -8,4 +8,23 @@
     <string name="countdown_seconds">%1$d...</string>
     <string name="saving_in_seconds">Saving in %1$d...</string>
     <string name="device_admin_description">Enables full lockdown kiosk modes for the wedding photobooth.</string>
+
+    <string name="storage_low_warning">Storage running low!</string>
+    <string name="save_failed_warning">Couldn\'t save photo!</string>
+
+    <string name="admin_gear_desc">Admin settings</string>
+    <string name="admin_pin_title">Enter admin PIN</string>
+    <string name="admin_pin_hint">PIN</string>
+    <string name="admin_pin_incorrect">Incorrect PIN</string>
+    <string name="admin_settings_title">Upload settings</string>
+    <string name="admin_settings_incomplete">Please fill in all required fields</string>
+    <string name="label_access_key_id">AWS Access Key ID</string>
+    <string name="label_secret_access_key">AWS Secret Access Key</string>
+    <string name="label_bucket_name">S3 Bucket Name</string>
+    <string name="label_region">AWS Region (e.g. us-east-1)</string>
+    <string name="label_key_prefix">S3 Key Prefix (optional)</string>
+    <string name="hint_secret_unchanged">(unchanged)</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="submit">Submit</string>
 </resources>
