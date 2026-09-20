@@ -176,6 +176,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
             WatchdogScheduler.updateHeartbeat(this@MainActivity)
+            // Safety net: the onConnect confirm block is one-shot, so if that single
+            // check ever misses, nothing else clears the fault screen. Re-check here on
+            // every heartbeat and clear it whenever the camera is demonstrably previewing
+            // again. Runs before onTick so a recovery that lands right as the debounce
+            // expires clears the fault instead of first firing a false disconnect alert.
+            if (cameraAlertState.phase != CameraAlertState.Phase.HEALTHY &&
+                mCameraHandler?.isPreviewing == true) {
+                applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
+            }
             applyAlertEffects(cameraAlertState.onTick(SystemClock.elapsedRealtime()))
             applyBrightness()
             mainHandler.postDelayed(this, 5000)
