@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Logitech BRIO, exact match (vendor 0x046D, product 0x085E) -->
+    <usb-device vendor-id="1133" product-id="2142" />
+    <!-- Any USB composite device using an Interface Association Descriptor -->
+    <usb-device class="239" subclass="2" protocol="1" />
+    <!-- Any UVC video device, so a swapped webcam still matches -->
+    <usb-device class="14" />
+</resources>
