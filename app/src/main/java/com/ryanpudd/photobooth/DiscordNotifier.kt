@@ -1,5 +1,6 @@
 package com.ryanpudd.photobooth
 
+import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -8,8 +9,9 @@ import java.util.concurrent.Executors
  * Fire-and-forget Discord webhook sender.
  *
  * No retries by design: a battery alert that lands 40 minutes late is noise,
- * and the full-screen message is the primary channel. Contains no Android
- * imports so it stays unit-testable and usable from any thread.
+ * and the full-screen message is the primary channel. Failures are logged
+ * (not surfaced or retried) so a dead webhook leaves a trace instead of
+ * vanishing silently — see the `onFailure`/status-code checks in [send].
  */
 class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
 
@@ -23,6 +25,12 @@ class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
         if (!DiscordPayload.isValidWebhookUrl(url)) return
         executor.execute {
             runCatching { sendBlocking(url, content, mentionEveryone) }
+                .onSuccess { code ->
+                    if (code !in 200..299) {
+                        Log.w(TAG, "Discord webhook responded with non-success status $code")
+                    }
+                }
+                .onFailure { Log.w(TAG, "Discord send failed", it) }
         }
     }
 
@@ -50,6 +58,7 @@ class DiscordNotifier(private val webhookUrlProvider: () -> String?) {
     }
 
     companion object {
+        private const val TAG = "DiscordNotifier"
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 10_000
     }
