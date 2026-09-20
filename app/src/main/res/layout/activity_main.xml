@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout 
+<androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#000000"
+    android:keepScreenOn="true">
 
     <!-- Camera Preview Surface (stub for now, will be updated to TextureView) -->
     <FrameLayout
@@ -20,50 +23,100 @@
             android:id="@+id/camera_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+
+        <!-- still image, hidden until reveal -->
+        <ImageView
+            android:id="@+id/stillImageView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="invisible"
+            android:scaleType="centerCrop" />
+
+        <View
+            android:id="@+id/flashOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/white"
+            android:alpha="0"
+            android:elevation="10dp" />
+
+        <ImageView
+            android:id="@+id/overlayBorder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false"
+            android:scaleType="fitXY"
+            android:src="@drawable/border_overlay" />
     </FrameLayout>
 
-    <!-- Overlay UI Text and Start Button -->
-    <Button
-        android:id="@+id/statusOverlayText"
+    <!-- Overlay UI Text and Buttons — centred as one group on top of the border -->
+    <LinearLayout
+        android:id="@+id/overlayControls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_margin="32dp"
-        android:text="@string/tap_to_take_photo"
-        android:visibility="gone"
-        android:textAllCaps="false"
-        android:textSize="48sp"
+        android:gravity="center"
+        android:orientation="vertical"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <Button
+            android:id="@+id/statusOverlayText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@android:color/transparent"
+            android:text="@string/tap_to_take_photo"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="48sp"
+            android:visibility="visible" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnRetake"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="24dp"
+                android:background="@drawable/button_border"
+                android:text="@string/retake"
+                android:textColor="#FFFFFF"
+                android:textSize="32sp"
+                android:visibility="visible" />
+
+            <Button
+                android:id="@+id/btnKeep"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/button_border"
+                android:text="@string/keep"
+                android:textColor="#FFFFFF"
+                android:textSize="32sp"
+                android:visibility="visible" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- overlay border — always on top, non-interactive -->
+
+    <!-- Admin gear — hidden by default, revealed by long-press on the idle screen -->
+    <ImageButton
+        android:id="@+id/btnAdminGear"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_margin="12dp"
         android:background="@android:color/transparent"
-        android:textColor="#FFFFFF"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <Button
-        android:id="@+id/btnKeep"
-
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/keep"
+        android:src="@android:drawable/ic_menu_preferences"
+        android:contentDescription="@string/admin_gear_desc"
         android:visibility="gone"
-        android:textSize="32sp"
-        android:background="@drawable/button_border"
-        android:textColor="#FFFFFF"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        android:layout_margin="32dp"/>
-
-    <Button
-        android:id="@+id/btnRetake"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/retake"
-        android:visibility="gone"
-        android:textSize="32sp"
-        android:background="@drawable/button_border"
-        android:textColor="#FFFFFF"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        android:layout_margin="32dp"/>
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
