@@ -18,6 +18,7 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.View
 import android.view.ViewAnimationUtils
@@ -98,6 +99,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var reviewTimer: CountDownTimer? = null
     private var preCaptureTimer: CountDownTimer? = null
 
+    // Task 8: screen brightness. Window-level only (see applyBrightness), so it
+    // needs no permission and Android restores normal brightness automatically
+    // if this app loses focus or dies.
+    private var lastTouchElapsedMs = SystemClock.elapsedRealtime()
+    private var appliedBrightness = -1f
+
     private val discordNotifier = DiscordNotifier { AlertSettingsStore.loadWebhookUrl(this) }
 
     private val recentCameraErrors = ConcurrentLinkedQueue<String>()
@@ -132,6 +139,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         override fun run() {
             WatchdogScheduler.updateHeartbeat(this@MainActivity)
             applyAlertEffects(cameraAlertState.onTick(SystemClock.elapsedRealtime()))
+            applyBrightness()
             mainHandler.postDelayed(this, 5000)
         }
     }
@@ -174,6 +182,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applyBrightness()
 
         // TODO: Should be in base class
         // ワーカースレッドを生成
@@ -276,6 +285,33 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private fun syncDemoBanner() {
         demoBanner.visibility = if (isDemoModeEnabled()) View.VISIBLE else View.GONE
+    }
+
+    // Task 8: any touch anywhere wakes the screen. Returning super means the
+    // touch still reaches whatever view is underneath (including the Task 6
+    // fault overlay, which is clickable="true" specifically so it swallows
+    // taps and blocks a countdown against a dead camera) - so a tap on the
+    // idle screen both wakes the display and starts the countdown in one go,
+    // while a tap on the fault overlay only wakes the display.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        lastTouchElapsedMs = SystemClock.elapsedRealtime()
+        applyBrightness()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /**
+     * Window-level brightness only: needs no permission, touches nothing
+     * system-wide, and Android restores it if the app loses focus or dies.
+     */
+    private fun applyBrightness() {
+        val target = BrightnessPolicy.brightnessFor(
+            demoMode = isDemoModeEnabled(),
+            isIdle = currentState == BoothState.IDLE,
+            msSinceLastTouch = SystemClock.elapsedRealtime() - lastTouchElapsedMs
+        )
+        if (target == appliedBrightness) return
+        appliedBrightness = target
+        window.attributes = window.attributes.apply { screenBrightness = target }
     }
 
     private fun resetToIdle() {
