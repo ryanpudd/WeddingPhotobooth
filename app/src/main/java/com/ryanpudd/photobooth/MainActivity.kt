@@ -434,6 +434,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     }
 
     private fun showAdminPinDialog() {
+        // The gear is reachable from any BoothState (including mid-countdown), but the
+        // dialog doesn't pause the Looper — an in-flight preCaptureTimer/reviewTimer would
+        // otherwise fire behind the modal. Drop back to idle before showing the PIN prompt.
+        resetToIdle()
+
         val view = layoutInflater.inflate(R.layout.dialog_admin_pin, null)
         val pinInput = view.findViewById<EditText>(R.id.pinInput)
 
