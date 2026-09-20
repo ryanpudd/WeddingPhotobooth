@@ -75,6 +75,19 @@ class UploadQueueManagerTest {
     }
 
     @Test
+    fun findNextPendingFile_ordersChronologically_acrossDemoAndRealFiles() {
+        val dir = tempFolder.newFolder("pending-mixed")
+        // Demo file has a LATER timestamp but the DEMO_ prefix sorts lexicographically
+        // before "IMG_" ('D' < 'I'), so a naive filename comparison would wrongly pick
+        // it first and starve the earlier real guest photo behind it.
+        File(dir, "DEMO_IMG_20260920_193102_001.jpg").createNewFile()
+        File(dir, "IMG_20260920_193045_001.jpg").createNewFile()
+
+        val next = UploadQueueManager.findNextPendingFile(dir)
+        assertEquals("IMG_20260920_193045_001.jpg", next?.name)
+    }
+
+    @Test
     fun findNextDueRetryFile_skipsFilesNotYetDue() {
         val dir = tempFolder.newFolder("retry")
         val notDue = File(dir, "IMG_a__u1.jpg").apply { createNewFile() }

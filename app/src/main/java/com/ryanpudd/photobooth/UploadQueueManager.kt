@@ -45,10 +45,16 @@ object UploadQueueManager {
         }
     }
 
-    /** Oldest (by filename, which sorts chronologically) not-yet-attempted file, or null. */
+    /**
+     * Oldest not-yet-attempted file, or null. Ordering is chronological across both
+     * demo and real files: filenames sort chronologically by their embedded timestamp,
+     * but the DEMO_ prefix ('D' < 'I') would otherwise sort ahead of every real IMG_
+     * file regardless of timestamp, starving guest photos behind a demo backlog. The
+     * prefix is stripped before comparing so demo and real files interleave by time.
+     */
     fun findNextPendingFile(pendingDir: File): File? =
         pendingDir.listFiles { f -> f.isFile && f.name.endsWith(".jpg") }
-            ?.minByOrNull { it.name }
+            ?.minByOrNull { it.name.removePrefix(DEMO_PREFIX) }
 
     /** Oldest retry file whose backoff window has elapsed, or null if none are due yet. */
     fun findNextDueRetryFile(retryDir: File, now: Long): File? =
