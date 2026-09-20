@@ -81,6 +81,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var reviewTimer: CountDownTimer? = null
     private var preCaptureTimer: CountDownTimer? = null
 
+    private val discordNotifier = DiscordNotifier { AlertSettingsStore.loadWebhookUrl(this) }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val captureRunnable = Runnable { showReviewScreen() }
 
@@ -119,6 +121,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(gearHideRunnable)
         uploadWorker.stop()
+        discordNotifier.shutdown()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -455,6 +458,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         val inputBucket = view.findViewById<EditText>(R.id.inputBucket)
         val inputRegion = view.findViewById<EditText>(R.id.inputRegion)
         val inputKeyPrefix = view.findViewById<EditText>(R.id.inputKeyPrefix)
+        val inputWebhookUrl = view.findViewById<EditText>(R.id.inputWebhookUrl)
+        val btnSendTestAlert = view.findViewById<Button>(R.id.btnSendTestAlert)
 
         val existing = CredentialsStore.loadNonSecretFields(this)
         inputAccessKeyId.setText(existing.accessKeyId)
@@ -463,6 +468,22 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         inputKeyPrefix.setText(existing.keyPrefix)
         if (CredentialsStore.hasStoredSecret(this)) {
             inputSecretKey.hint = getString(R.string.hint_secret_unchanged)
+        }
+
+        if (AlertSettingsStore.hasWebhookUrl(this)) {
+            inputWebhookUrl.hint = getString(R.string.hint_webhook_unchanged)
+        }
+
+        btnSendTestAlert.setOnClickListener {
+            if (AlertSettingsStore.hasWebhookUrl(this)) {
+                discordNotifier.send(
+                    "✅ **Photobooth test alert** — if you can see this, alerts are working.",
+                    mentionEveryone = true
+                )
+                Toast.makeText(this, R.string.toast_test_alert_sent, Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, R.string.toast_no_webhook, Toast.LENGTH_SHORT).show()
+            }
         }
 
         AlertDialog.Builder(this)
@@ -484,6 +505,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 if (accessKeyId.isBlank() || secretKey.isBlank() || bucket.isBlank() || region.isBlank()) {
                     Toast.makeText(this, R.string.admin_settings_incomplete, Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
+                }
+
+                val webhookInput = inputWebhookUrl.text.toString().trim()
+                if (webhookInput.isNotBlank()) {
+                    if (!DiscordPayload.isValidWebhookUrl(webhookInput)) {
+                        Toast.makeText(this, R.string.admin_webhook_invalid, Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
+                    }
+                    AlertSettingsStore.saveWebhookUrl(this, webhookInput)
                 }
 
                 CredentialsStore.save(

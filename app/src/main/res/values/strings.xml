@@ -27,4 +27,11 @@
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="submit">Submit</string>
+    <string name="label_webhook_url">Discord Webhook URL</string>
+    <string name="hint_webhook_unchanged">(unchanged)</string>
+    <string name="admin_webhook_invalid">Not a valid Discord webhook URL</string>
+    <string name="btn_send_test_alert">Send test alert</string>
+    <string name="btn_send_diagnostics">Send diagnostics</string>
+    <string name="toast_test_alert_sent">Test alert queued</string>
+    <string name="toast_no_webhook">No Discord webhook configured</string>
 </resources>
