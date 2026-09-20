@@ -76,6 +76,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private lateinit var btnKeep: Button
     private lateinit var btnRetake: Button
     private lateinit var btnAdminGear: ImageButton
+    private lateinit var faultOverlay: TextView
+
+    private val cameraAlertState = CameraAlertState()
 
     private lateinit var uploadWorker: UploadWorker
     private val gearHideRunnable = Runnable { btnAdminGear.visibility = View.GONE }
@@ -113,10 +116,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private var mPreviewImage: Bitmap? = null
 
-    // Heartbeat runnable to update watchdog preference every 5 seconds
+    // Heartbeat runnable: updates the watchdog preference and drives the alert
+    // state machine's clock. 5s granularity against a 30s debounce is plenty,
+    // and reusing this runnable avoids introducing another thread.
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
             WatchdogScheduler.updateHeartbeat(this@MainActivity)
+            applyAlertEffects(cameraAlertState.onTick(SystemClock.elapsedRealtime()))
             mainHandler.postDelayed(this, 5000)
         }
     }
@@ -178,6 +184,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         btnKeep = findViewById(R.id.btnKeep)
         btnRetake = findViewById(R.id.btnRetake)
         btnAdminGear = findViewById(R.id.btnAdminGear)
+        faultOverlay = findViewById(R.id.faultOverlay)
 
         btnKeep.setOnClickListener { handleKeep() }
         btnRetake.setOnClickListener { handleRetake() }
@@ -563,8 +570,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             deviceName = device?.deviceName,
             vendorId = device?.vendorId,
             productId = device?.productId,
-            // TODO(Task 6): replace with cameraAlertState.phase.name once that field exists.
-            alertPhase = "UNWIRED",
+            alertPhase = cameraAlertState.phase.name,
             batteryLevelPercent = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1,
             batteryPluggedRaw = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1,
             appUptimeMs = SystemClock.elapsedRealtime() - appStartedElapsedMs,
@@ -576,6 +582,22 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         recentCameraErrors.add(message)
         while (recentCameraErrors.size > MAX_RECENT_CAMERA_ERRORS) {
             recentCameraErrors.poll()
+        }
+    }
+
+    /** Applies the state machine's decisions. Main thread only. */
+    private fun applyAlertEffects(effects: List<AlertEffect>) {
+        for (effect in effects) {
+            when (effect) {
+                AlertEffect.SHOW_FAULT_SCREEN -> faultOverlay.visibility = View.VISIBLE
+                AlertEffect.HIDE_FAULT_SCREEN -> faultOverlay.visibility = View.GONE
+                AlertEffect.SEND_DISCONNECT_ALERT ->
+                    // TODO(Task 7): replace literal `false` with isDemoModeEnabled().
+                    discordNotifier.send(AlertMessages.disconnect(false), mentionEveryone = true)
+                AlertEffect.SEND_ALL_CLEAR ->
+                    // TODO(Task 7): replace literal `false` with isDemoModeEnabled().
+                    discordNotifier.send(AlertMessages.allClear(false), mentionEveryone = false)
+            }
         }
     }
 
@@ -737,6 +759,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 //if (MainActivity.DEBUG) Log.v(MainActivity.TAG, "onConnect:")
                 mCameraHandler!!.open(ctrlBlock)
                 startPreview()
+                // USBMonitor delivers onConnect on its own async handler thread, not the
+                // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
+                val nowMs = SystemClock.elapsedRealtime()
+                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraBack(nowMs)) }
             }
 
             override fun onDisconnect(device: UsbDevice?, ctrlBlock: UsbControlBlock?) {
@@ -746,10 +772,20 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     // TODO - Stop showing the button if there is no camera
                     //setCameraButton(false)
                 }
+                // Idempotent: onDisconnect and onDettach both fire for one unplug.
+                // Driven via mainHandler since USBMonitor's delivery thread for this
+                // callback should not be relied upon; cameraAlertState is main-thread-only.
+                val nowMs = SystemClock.elapsedRealtime()
+                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraLost(nowMs)) }
             }
 
             override fun onDettach(device: UsbDevice?) {
                 Toast.makeText(this@MainActivity, "Camera Disconnected", Toast.LENGTH_SHORT).show()
+                recordCameraError("onDettach at ${System.currentTimeMillis()}")
+                // USBMonitor delivers onDettach on its own async handler thread, not the
+                // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
+                val nowMs = SystemClock.elapsedRealtime()
+                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraLost(nowMs)) }
             }
 
             override fun onCancel(device: UsbDevice?) {

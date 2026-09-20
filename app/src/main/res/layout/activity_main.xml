@@ -119,4 +119,22 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- Full-screen camera fault takeover. Last child so it draws on top of
+         everything above; clickable swallows taps so nobody starts a
+         countdown against a dead camera. -->
+    <TextView
+        android:id="@+id/faultOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:padding="48dp"
+        android:text="@string/fault_battery_swap"
+        android:textColor="#FFFFFF"
+        android:textSize="44sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

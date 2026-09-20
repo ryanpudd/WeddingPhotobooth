@@ -34,4 +34,5 @@
     <string name="btn_send_diagnostics">Send diagnostics</string>
     <string name="toast_test_alert_sent">Test alert queued</string>
     <string name="toast_no_webhook">No Discord webhook configured</string>
+    <string name="fault_battery_swap">Booth needs a battery swap, find someone to help</string>
 </resources>
