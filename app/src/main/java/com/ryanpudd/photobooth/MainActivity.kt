@@ -134,6 +134,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(captureRunnable)
         mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(gearHideRunnable)
+        // The USB alert wiring posts anonymous lambdas (onConnect/onDisconnect/onDettach)
+        // that can't be removed by reference above. mUSBMonitor is never unregistered, so
+        // one could still be queued here; drop everything before the executor beneath
+        // discordNotifier.shutdown() goes away, or a late SEND_* effect throws
+        // RejectedExecutionException on the main thread.
+        mainHandler.removeCallbacksAndMessages(null)
         uploadWorker.stop()
         discordNotifier.shutdown()
     }
@@ -185,6 +191,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         btnRetake = findViewById(R.id.btnRetake)
         btnAdminGear = findViewById(R.id.btnAdminGear)
         faultOverlay = findViewById(R.id.faultOverlay)
+        // The XML's @string/fault_battery_swap is a design-time preview only; the copy the
+        // guest actually sees is driven from the tested AlertMessages constant so the two
+        // can't silently drift apart.
+        faultOverlay.text = AlertMessages.FAULT_SCREEN_TEXT
 
         btnKeep.setOnClickListener { handleKeep() }
         btnRetake.setOnClickListener { handleRetake() }
@@ -589,7 +599,16 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private fun applyAlertEffects(effects: List<AlertEffect>) {
         for (effect in effects) {
             when (effect) {
-                AlertEffect.SHOW_FAULT_SCREEN -> faultOverlay.visibility = View.VISIBLE
+                AlertEffect.SHOW_FAULT_SCREEN -> {
+                    // A countdown or review screen in flight when the camera dies must not
+                    // keep running behind the overlay — same defect class as the admin-PIN
+                    // fix: an in-flight timer ignoring a state interruption. resetToIdle()
+                    // cancels both timers and drops currentState back to IDLE so that when
+                    // HIDE_FAULT_SCREEN later fires, the guest lands on a clean idle booth
+                    // instead of a stale review screen for a frame that was never taken.
+                    resetToIdle()
+                    faultOverlay.visibility = View.VISIBLE
+                }
                 AlertEffect.HIDE_FAULT_SCREEN -> faultOverlay.visibility = View.GONE
                 AlertEffect.SEND_DISCONNECT_ALERT ->
                     // TODO(Task 7): replace literal `false` with isDemoModeEnabled().
