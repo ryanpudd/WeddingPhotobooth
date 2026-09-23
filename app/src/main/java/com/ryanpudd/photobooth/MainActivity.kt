@@ -5,6 +5,7 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
@@ -217,6 +218,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(gearHideRunnable)
         mainHandler.removeCallbacks(demoCaptureRunnable)
         mainHandler.removeCallbacks(startupCameraCheckRunnable)
+        mainHandler.removeCallbacks(reconnectConfirmRunnable)
         // The USB alert wiring posts anonymous lambdas (onConnect/onDisconnect/onDettach)
         // that can't be removed by reference above. mUSBMonitor is never unregistered, so
         // one could still be queued here; drop everything before the executor beneath
@@ -245,6 +247,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // Initialize and start the background S3 upload worker
         uploadWorker = UploadWorker(applicationContext)
         uploadWorker.start()
+
+        // Never recorded from. Requested only because, while it is missing, Android shows the
+        // BRIO's USB permission prompt without "Use by default" (see the manifest).
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
+        }
 
         // Get the dimensions
         val displayMetrics = DisplayMetrics()
@@ -458,14 +466,48 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }.start()
     }
 
+    /**
+     * Bumped to invalidate any in-flight capture (camera lost, admin opened, timeout).
+     * A stale capture's result is dropped when its generation no longer matches.
+     */
+    @Volatile private var captureGeneration = 0
+    @Volatile private var captureThread: Thread? = null
+
+    /**
+     * captureStillImage() waits on the render thread with no timeout. It used to run on the
+     * camera handler thread, so a camera pulled mid-capture left that thread parked forever and
+     * the next close() from the main thread (which waits on it) deadlocked the whole app.
+     * It now runs on its own thread, which we can interrupt (the library swallows the
+     * InterruptedException and returns) without touching the camera thread.
+     */
+    private fun abortCapture() {
+        captureGeneration++
+        captureThread?.interrupt()
+    }
+
     private fun takePhoto() {
         playFlash()
-        mCameraHandler!!.post {
+        val generation = ++captureGeneration
+        val view = mUVCCameraView!!
+        mainHandler.postDelayed({
+            if (generation == captureGeneration && currentState == BoothState.CAPTURING) {
+                Log.w(TAG, "takePhoto: no frame after ${CAPTURE_TIMEOUT_MS}ms, aborting")
+                abortCapture()
+                recordCameraError("capture timed out at uptime ${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms")
+                resetToIdle()
+            }
+        }, CAPTURE_TIMEOUT_MS)
+        captureThread = Thread({
             try {
-                val source = mUVCCameraView!!.captureStillImage()
+                val source = view.captureStillImage()
+                if (generation != captureGeneration || source == null) return@Thread
                 val matrix = Matrix().apply { preScale(-1f, 1f) }
                 val copy = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, false)
                 mainHandler.post {
+                    if (generation != captureGeneration) {
+                        copy.recycle()
+                        return@post
+                    }
                     // M4: the camera can die between this post to the camera worker and the
                     // callback landing on the main thread. By then SHOW_FAULT_SCREEN has already
                     // run resetToIdle(); carrying on would drive the review screen up behind the
@@ -480,7 +522,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             } catch (e: Exception) {
                 Log.e(TAG, "takePhoto", e)
             }
-        }
+        }, "still-capture").also { it.start() }
     }
 
     private fun playFlash() {
@@ -595,6 +637,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // The gear is reachable from any BoothState (including mid-countdown), but the
         // dialog doesn't pause the Looper — an in-flight preCaptureTimer/reviewTimer would
         // otherwise fire behind the modal. Drop back to idle before showing the PIN prompt.
+        abortCapture()
         resetToIdle()
 
         val view = layoutInflater.inflate(R.layout.dialog_admin_pin, null)
@@ -682,7 +725,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 val bucket = inputBucket.text.toString().trim()
                 val region = inputRegion.text.toString().trim()
                 val keyPrefix = inputKeyPrefix.text.toString().trim()
-                val secretInput = inputSecretKey.text.toString()
+                val secretInput = inputSecretKey.text.toString().trim()
                 val secretKey = if (secretInput.isBlank()) {
                     CredentialsStore.load(this)?.secretKey ?: ""
                 } else {
@@ -697,6 +740,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
                 if (accessKeyId.isBlank() || secretKey.isBlank() || bucket.isBlank() || region.isBlank()) {
                     Toast.makeText(this, R.string.admin_settings_incomplete, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                // AWS secret access keys are always 40 characters. A shorter one is a paste or
+                // typing slip that would only surface later as a silent SignatureDoesNotMatch.
+                if (secretInput.isNotEmpty() && secretInput.length != AWS_SECRET_KEY_LENGTH) {
+                    Toast.makeText(this, getString(R.string.admin_secret_length_invalid, secretInput.length), Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
 
@@ -738,7 +788,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             batteryLevelPercent = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1,
             batteryPluggedRaw = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1,
             appUptimeMs = SystemClock.elapsedRealtime() - appStartedElapsedMs,
-            lastCameraErrors = recentCameraErrors.toList()
+            lastCameraErrors = recentCameraErrors.toList(),
+            uploadPending = UploadQueueManager.countJpgs(UploadQueueManager.pendingDir(this)),
+            uploadRetrying = UploadQueueManager.countJpgs(UploadQueueManager.retryDir(this)),
+            uploadFailed = UploadQueueManager.countJpgs(UploadQueueManager.failedDir(this)),
+            lastUploadError = UploadWorker.lastError
         )
     }
 
@@ -915,6 +969,35 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
     }
 
+    private var reconnectConfirmDeadlineMs = 0L
+    private val reconnectConfirmRunnable = object : Runnable {
+        override fun run() {
+            if (mCameraHandler?.isPreviewing == true) {
+                applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
+            } else if (SystemClock.elapsedRealtime() < reconnectConfirmDeadlineMs) {
+                mainHandler.postDelayed(this, RECONNECT_CONFIRM_POLL_MS)
+            } else {
+                Log.w(TAG, "onConnect: preview not up after reconnect; holding fault screen")
+                recordCameraError(
+                    "reconnect without preview at uptime " +
+                        "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
+                )
+            }
+        }
+    }
+
+    /**
+     * onConnect is the event, not evidence that the preview actually came up, so recovery is
+     * only declared once isPreviewing turns true. The BRIO needs ~1.3-1.6s from onConnect to
+     * its first frame, which a single fixed-delay check kept missing, so poll until then.
+     * The heartbeat safety net still covers anything that outlasts the deadline.
+     */
+    private fun startReconnectConfirm() {
+        mainHandler.removeCallbacks(reconnectConfirmRunnable)
+        reconnectConfirmDeadlineMs = SystemClock.elapsedRealtime() + RECONNECT_CONFIRM_TIMEOUT_MS
+        mainHandler.postDelayed(reconnectConfirmRunnable, RECONNECT_CONFIRM_POLL_MS)
+    }
+
     private val mOnDeviceConnectListener: OnDeviceConnectListener =
         object : OnDeviceConnectListener {
             override fun onAttach(device: UsbDevice?) {
@@ -941,21 +1024,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // margin) and gated on isPreviewing. If the preview did not come up, the overlay
                 // stays and nothing is sent. nowMs is read when the check runs, so the debounce
                 // arithmetic reflects when recovery was confirmed.
-                mainHandler.postDelayed({
-                    if (mCameraHandler?.isPreviewing == true) {
-                        applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
-                    } else {
-                        Log.w(TAG, "onConnect: preview not up after reconnect; holding fault screen")
-                        recordCameraError(
-                            "reconnect without preview at uptime " +
-                                "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
-                        )
-                    }
-                }, CAMERA_CALIBRATION_DELAY_MS + RECONNECT_CONFIRM_MARGIN_MS)
+                mainHandler.post { startReconnectConfirm() }
             }
 
             override fun onDisconnect(device: UsbDevice?, ctrlBlock: UsbControlBlock?) {
                 //if (MainActivity.DEBUG) Log.v(MainActivity.TAG, "onDisconnect:")
+                // Must precede close(): it waits on the camera thread, which a capture in
+                // flight could otherwise be holding.
+                abortCapture()
                 if (mCameraHandler != null) {
                     mCameraHandler!!.close()
                     // TODO - Stop showing the button if there is no camera
@@ -969,6 +1045,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             }
 
             override fun onDettach(device: UsbDevice?) {
+                abortCapture()
                 Toast.makeText(this@MainActivity, "Camera Disconnected", Toast.LENGTH_SHORT).show()
                 recordCameraError("onDettach at ${System.currentTimeMillis()}")
                 // USBMonitor delivers onDettach on its own async handler thread, not the
@@ -1023,7 +1100,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         private const val GEAR_VISIBLE_MS = 8_000L
         /** One-shot grace period for the camera to come up from cold before we call it lost. */
         private const val STARTUP_CAMERA_CHECK_DELAY_MS = 15_000L
-        /** Slack on top of CAMERA_CALIBRATION_DELAY_MS before a reconnect counts as confirmed. */
-        private const val RECONNECT_CONFIRM_MARGIN_MS = 700L
+        private const val RECONNECT_CONFIRM_POLL_MS = 250L
+        private const val RECONNECT_CONFIRM_TIMEOUT_MS = 8_000L
+        /** A still capture that gets no frame in this long is abandoned. */
+        private const val CAPTURE_TIMEOUT_MS = 3_000L
+        private const val AWS_SECRET_KEY_LENGTH = 40
     }
 }

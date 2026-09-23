@@ -37,17 +37,11 @@ A result here is therefore a **floor**. Real-world runtime should beat it.
     of upload capacity that would otherwise block guests' photos during the
     wedding.)
 
-## Result
+## Results
 
-| Field | Value |
-|---|---|
-| Date of test | |
-| Pack make / capacity | |
-| **Target duration** (fill in *before* starting) | |
-| Start time | |
-| Alert timestamp | |
-| **Measured runtime** | |
-| Tablet battery % at alert | |
+| Date of test | Pack make / capacity| **Target duration** (fill in *before* starting)| Start time| Alert timestamp| **Measured runtime**| Tablet battery % at alert |
+|---|---|---|---|---|---|---|
+|22/09/26|Anker PowerCore 24K|7 hours|21:32||||
 
 ## What the result decides
 

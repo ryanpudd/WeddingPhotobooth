@@ -5,6 +5,10 @@
     <uses-feature android:name="android.hardware.usb.host" />
     
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Never used to record. The BRIO exposes a USB microphone, and Android (9+) swaps the
+         USB permission dialog for an audio-capture warning that omits "Use by default" unless
+         the requesting app holds RECORD_AUDIO. Without this the grant never persists. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />

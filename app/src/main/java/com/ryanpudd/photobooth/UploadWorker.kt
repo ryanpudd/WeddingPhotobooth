@@ -18,6 +18,9 @@ class UploadWorker(private val context: Context) {
     companion object {
         private const val TAG = "UploadWorker"
         private const val POLL_INTERVAL_MS = 20_000L
+
+        /** Most recent upload failure (null after a success), surfaced in the diagnostics report. */
+        @Volatile var lastError: String? = null
     }
 
     private val workerThread = HandlerThread("UploadWorker").apply { start() }
@@ -65,9 +68,17 @@ class UploadWorker(private val context: Context) {
             ?: return
 
         when (val result = S3Uploader(config).upload(file)) {
-            is UploadResult.Success -> file.delete()
+            is UploadResult.Success -> {
+                lastError = null
+                file.delete()
+            }
             is UploadResult.Failure -> {
-                Log.w(TAG, "upload failed for ${file.name}: ${result.reason}")
+                // Length and whitespace only, never the secret itself: a wrong length or a stray
+                // newline is the usual cause of SignatureDoesNotMatch.
+                lastError = "${result.reason} [keyId=...${config.accessKeyId.takeLast(4)} " +
+                    "secretLen=${config.secretKey.length} " +
+                    "secretHasWhitespace=${config.secretKey.any { it.isWhitespace() }}]"
+                Log.w(TAG, "upload failed for ${file.name}: $lastError")
                 val nextAttempt = UploadQueueManager.attemptCount(file.name) + 1
                 if (nextAttempt >= UploadQueueManager.MAX_ATTEMPTS) {
                     UploadQueueManager.moveToFailed(file, failedDir)

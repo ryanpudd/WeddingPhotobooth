@@ -11,6 +11,10 @@ the measurement that decides the deferred questions.
 
 Install first: `./gradlew :app:installDebug`
 
+**Also grant audio once:** the app now requests `RECORD_AUDIO` on first launch (it never records;
+the BRIO's built-in mic makes Android hide "Use by default" unless the app holds it). Tap Allow,
+or install with `adb install -r -g`. If the prompt is denied, the checkbox will not appear.
+
 ---
 
 ## 1. USB permission persistence — the whole point of Task 1
@@ -28,6 +32,10 @@ worthless until it is.
    (`com.slrbooth.studio`) filters on USB classes 6 and 7, not the BRIO's 14/239.
 6. Reboot the tablet and replug once more.
 
+### Results
+
+PASS
+
 ## 2. Admin gear reachable during a fault — never run on hardware
 
 The gear is revealed by a long-press that now also has to get past the full-screen fault
@@ -40,6 +48,10 @@ overlay. `bringToFront()` is the part that has never executed.
    still auto-hides after 8 seconds.
 4. Confirm the gear stays pinned top-right after the reveal and nothing else on screen shifts.
 
+### Results
+
+PASS
+
 ## 3. Discord webhook actually reaches phones
 
 1. Create a channel and a webhook (Channel Settings → Integrations → Webhooks → New Webhook →
@@ -50,6 +62,10 @@ overlay. `bringToFront()` is the part that has never executed.
 4. Reopen admin. **Expect:** the webhook field shows the `(unchanged)` hint, not the URL.
 5. Enter a non-Discord URL and Save. **Expect:** `Not a valid Discord webhook URL`, dialog
    stays open.
+
+### Results
+
+PASS
 
 ---
 
@@ -65,15 +81,22 @@ overlay. `bringToFront()` is the part that has never executed.
 5. Replug. **Expect:** overlay clears and an all-clear arrives with no mention.
 6. Unplug once more. **Expect:** it alerts again — the machine re-arms after recovery.
 
+### Results
+
+PASS
+
 ## 5. Reconnect timing — the known tuning risk
 
 Unplug, wait past the 30-second debounce, replug. The overlay must clear and the all-clear
 must arrive about **1 second** after reconnect.
 
-If the BRIO needs longer than `CAMERA_CALIBRATION_DELAY_MS + RECONNECT_CONFIRM_MARGIN_MS`
-(1000 ms total) to report `isPreviewing`, the one-shot confirmation misses — but the heartbeat
-safety net clears the fault within 5 seconds regardless. If you see a consistent ~5 second
-delay rather than ~1 second, raise `RECONNECT_CONFIRM_MARGIN_MS`.
+The reconnect check now polls every 250 ms (up to 8 s) until `isPreviewing`, because the BRIO
+takes ~1.3-1.6 s from `onConnect` to its first frame. Expect roughly 1.5-2 s, not 1 s. The
+heartbeat safety net still clears the fault within 5 s regardless.
+
+### Results
+
+PASS
 
 ## 6. Cold start with no camera — new behaviour, never run
 
@@ -85,6 +108,10 @@ delay rather than ~1 second, raise `RECONNECT_CONFIRM_MARGIN_MS`.
    If the BRIO routinely takes longer than 15 s to reach `isPreviewing` on this tablet,
    `STARTUP_CAMERA_CHECK_DELAY_MS` needs raising. **This is the single most likely tuning miss.**
 
+### Results
+
+PASS
+
 ## 7. Countdown interruption
 
 1. Start a countdown, then unplug mid-countdown. **Expect:** fault screen immediately, no
@@ -93,6 +120,10 @@ delay rather than ~1 second, raise `RECONNECT_CONFIRM_MARGIN_MS`.
 3. Long-press during an active countdown. **Expect:** the countdown stops and the gear appears.
 4. Dismiss admin (Cancel, or wrong PIN then back). **Expect:** the booth sits at idle, not
    showing a captured photo or advanced to review/upload.
+
+### Results
+
+PASS
 
 ## 8. Demo mode
 
@@ -105,6 +136,11 @@ delay rather than ~1 second, raise `RECONNECT_CONFIRM_MARGIN_MS`.
 5. Untick → Save. **Expect:** banner gone, auto-capture stopped.
 6. Clear one AWS field, tick Demo mode, Save. **Expect:** the "incomplete" toast **and** the
    banner turns on — the demo toggle now persists independently of the credentials.
+
+### Results
+
+PASS
+
 
 ## 9. Brightness
 
@@ -122,6 +158,10 @@ delay rather than ~1 second, raise `RECONNECT_CONFIRM_MARGIN_MS`.
    the other booth app) silently lapses the pin. That is the intended trade for avoiding
    `WRITE_SETTINGS`.
 
+### Results
+
+PASS
+
 ---
 
 ## 10. The battery drain test
@@ -131,3 +171,7 @@ above and is the only thing that tells you whether the pack lasts the evening.
 
 Fill in the target duration **before** starting, and clear the demo backlog afterwards —
 both are steps in that runbook.
+
+### Results
+
+DEFERED - Waiting for these issues

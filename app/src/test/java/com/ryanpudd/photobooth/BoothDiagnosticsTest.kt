@@ -82,4 +82,18 @@ class BoothDiagnosticsTest {
         val report = BoothDiagnostics.format(snapshot(lastCameraErrors = emptyList()))
         assertTrue(report.contains("errors: none"))
     }
+
+    @Test
+    fun format_reportsUploadQueueAndLastError() {
+        val report = BoothDiagnostics.format(
+            snapshot().copy(uploadPending = 2, uploadRetrying = 3, uploadFailed = 1, lastUploadError = "403 SignatureDoesNotMatch")
+        )
+        assertTrue(report.contains("uploads     : pending=2 retrying=3 failed=1"))
+        assertTrue(report.contains("upload err  : 403 SignatureDoesNotMatch"))
+    }
+
+    @Test
+    fun format_saysNoneWhenNoUploadError() {
+        assertTrue(BoothDiagnostics.format(snapshot()).contains("upload err  : none"))
+    }
 }

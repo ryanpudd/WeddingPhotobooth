@@ -18,7 +18,11 @@ data class DiagnosticsSnapshot(
     val batteryLevelPercent: Int,
     val batteryPluggedRaw: Int,
     val appUptimeMs: Long,
-    val lastCameraErrors: List<String>
+    val lastCameraErrors: List<String>,
+    val uploadPending: Int = 0,
+    val uploadRetrying: Int = 0,
+    val uploadFailed: Int = 0,
+    val lastUploadError: String? = null
 )
 
 object BoothDiagnostics {
@@ -44,6 +48,8 @@ object BoothDiagnostics {
             append("ids         : vendor=$vid product=$pid\n")
             append("battery     : ${snapshot.batteryLevelPercent}% plugged=${snapshot.batteryPluggedRaw}\n")
             append("uptime      : ${formatUptime(snapshot.appUptimeMs)}\n")
+            append("uploads     : pending=${snapshot.uploadPending} retrying=${snapshot.uploadRetrying} failed=${snapshot.uploadFailed}\n")
+            append("upload err  : ${snapshot.lastUploadError ?: "none"}\n")
             append("errors: $errors\n")
             append("```")
         }

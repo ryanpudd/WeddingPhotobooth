@@ -30,6 +30,9 @@ object UploadQueueManager {
 
     fun failedDir(context: Context): File = File(pendingDir(context), FAILED_DIR_NAME)
 
+    fun countJpgs(dir: File): Int =
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".jpg") }?.size ?: 0
+
     /** True when [fileName] came from a demo-mode capture. */
     fun isDemoFile(fileName: String): Boolean = fileName.startsWith(DEMO_PREFIX)
 
