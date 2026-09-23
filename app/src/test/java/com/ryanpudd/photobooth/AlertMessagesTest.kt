@@ -39,4 +39,32 @@ class AlertMessagesTest {
     fun allClear_inDemoMode_isPrefixed() {
         assertTrue(AlertMessages.allClear(isDemoMode = true).startsWith("[TEST]"))
     }
+
+    @Test
+    fun powerLost_mentionsEveryoneAndExplainsTheFix() {
+        val message = AlertMessages.powerLost(isDemoMode = false)
+        assertTrue(message.contains("@everyone"))
+        assertTrue(message.contains("power"))
+        assertFalse(message.contains("[TEST]"))
+    }
+
+    @Test
+    fun powerLost_inDemoMode_isPrefixedSoHelpersDoNotPanic() {
+        val message = AlertMessages.powerLost(isDemoMode = true)
+        assertTrue(message.startsWith("[TEST]"))
+        assertTrue(message.contains("@everyone"))
+    }
+
+    @Test
+    fun powerRestored_saysPowerIsBackAndDoesNotMentionEveryone() {
+        val message = AlertMessages.powerRestored(isDemoMode = false)
+        assertTrue(message.contains("power"))
+        assertFalse(message.contains("@everyone"))
+        assertFalse(message.contains("[TEST]"))
+    }
+
+    @Test
+    fun powerRestored_inDemoMode_isPrefixed() {
+        assertTrue(AlertMessages.powerRestored(isDemoMode = true).startsWith("[TEST]"))
+    }
 }

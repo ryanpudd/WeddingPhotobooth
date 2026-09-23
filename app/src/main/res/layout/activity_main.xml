@@ -154,4 +154,22 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- External-power warning badge — stacked under the demo banner so the two
+         never overlap, whether or not demo mode is on. See PowerAlertState. -->
+    <TextView
+        android:id="@+id/powerWarningBanner"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="8dp"
+        android:background="#CCAA6600"
+        android:padding="8dp"
+        android:text="@string/power_warning_banner"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/demoBanner" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

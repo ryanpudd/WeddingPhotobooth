@@ -9,11 +9,12 @@ enum class AlertEffect {
 }
 
 /**
- * Decides when a camera outage becomes an alert.
+ * Decides when an outage becomes an alert. MainActivity runs one instance for
+ * the camera and a second for external power loss.
  *
- * The screen message appears the instant the camera is lost, because the booth
- * is unusable immediately. The Discord alert waits [alertDelayMs] so a knocked
- * cable that recovers in a few seconds never reaches anyone's phone.
+ * The screen effect appears the instant the thing is lost, so anyone looking
+ * at the booth sees it right away. The Discord alert waits [alertDelayMs] so a
+ * knocked cable that recovers in a few seconds never reaches anyone's phone.
  *
  * Pure and time-injected: callers pass the clock in. Not thread-safe; drive it
  * from the main thread only.
@@ -30,15 +31,19 @@ class CameraAlertState(private val alertDelayMs: Long = DEFAULT_ALERT_DELAY_MS) 
     /**
      * USBMonitor fires both onDisconnect and onDettach for one unplug, so this
      * is idempotent: only the first loss while healthy produces effects.
+     *
+     * Generic on purpose: MainActivity runs a second instance of this class to
+     * track external-power loss, not just the camera, so the method names
+     * don't reference "camera" specifically.
      */
-    fun onCameraLost(nowMs: Long): List<AlertEffect> {
+    fun onLost(nowMs: Long): List<AlertEffect> {
         if (phase != Phase.HEALTHY) return emptyList()
         phase = Phase.PENDING
         lostAtMs = nowMs
         return listOf(AlertEffect.SHOW_FAULT_SCREEN)
     }
 
-    fun onCameraBack(nowMs: Long): List<AlertEffect> {
+    fun onBack(nowMs: Long): List<AlertEffect> {
         return when (phase) {
             Phase.HEALTHY -> emptyList()
             Phase.PENDING -> {

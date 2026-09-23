@@ -21,4 +21,15 @@ object AlertMessages {
         val body = "🟢 **Photobooth is back up** — camera reconnected, nothing more to do."
         return if (isDemoMode) TEST_PREFIX + body else body
     }
+
+    fun powerLost(isDemoMode: Boolean): String {
+        val body = "🔋 @everyone **Photobooth lost external power** — it's running on the tablet's " +
+            "own battery now. Check the pack and splitter connection."
+        return if (isDemoMode) TEST_PREFIX + body else body
+    }
+
+    fun powerRestored(isDemoMode: Boolean): String {
+        val body = "🟢 **Photobooth external power is back** — nothing more to do."
+        return if (isDemoMode) TEST_PREFIX + body else body
+    }
 }

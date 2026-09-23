@@ -85,6 +85,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private lateinit var btnAdminGear: ImageButton
     private lateinit var faultOverlay: TextView
     private lateinit var demoBanner: TextView
+    private lateinit var powerWarningBanner: TextView
 
     // Ruling 8: tracks whichever admin dialog (PIN entry or settings, including
     // the diagnostics report shown on top of settings) is currently up, so the
@@ -94,6 +95,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var adminDialog: AlertDialog? = null
 
     private val cameraAlertState = CameraAlertState()
+
+    // Separate instance/debounce from cameraAlertState: losing external power doesn't
+    // make the booth unusable (it just falls back to the tablet's own battery), so it
+    // gets its own phase instead of sharing the camera's fault-screen state.
+    private val powerAlertState = CameraAlertState()
 
     private lateinit var uploadWorker: UploadWorker
     private val gearHideRunnable = Runnable { btnAdminGear.visibility = View.GONE }
@@ -122,7 +128,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private val startupCameraCheckRunnable = Runnable {
         if (mCameraHandler?.isPreviewing != true) {
             Log.w(TAG, "startup camera check: no preview after ${STARTUP_CAMERA_CHECK_DELAY_MS}ms")
-            applyAlertEffects(cameraAlertState.onCameraLost(SystemClock.elapsedRealtime()))
+            applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
         }
     }
 
@@ -184,9 +190,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             // expires clears the fault instead of first firing a false disconnect alert.
             if (cameraAlertState.phase != CameraAlertState.Phase.HEALTHY &&
                 mCameraHandler?.isPreviewing == true) {
-                applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
+                applyAlertEffects(cameraAlertState.onBack(SystemClock.elapsedRealtime()))
             }
             applyAlertEffects(cameraAlertState.onTick(SystemClock.elapsedRealtime()))
+
+            if (isOnExternalPower()) {
+                applyPowerAlertEffects(powerAlertState.onBack(SystemClock.elapsedRealtime()))
+            } else {
+                applyPowerAlertEffects(powerAlertState.onLost(SystemClock.elapsedRealtime()))
+            }
+            applyPowerAlertEffects(powerAlertState.onTick(SystemClock.elapsedRealtime()))
+
             applyBrightness()
             mainHandler.postDelayed(this, 5000)
         }
@@ -288,6 +302,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         faultOverlay.text = AlertMessages.FAULT_SCREEN_TEXT
         demoBanner = findViewById(R.id.demoBanner)
         syncDemoBanner()
+        powerWarningBanner = findViewById(R.id.powerWarningBanner)
         // Must run after the views above are bound: applyBrightness() now reads
         // faultOverlay.visibility (M2), which is lateinit until findViewById above.
         applyBrightness()
@@ -826,6 +841,35 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
     }
 
+    /**
+     * Unlike the camera fault screen, losing external power doesn't stop the booth
+     * from working — it just means the tablet is running on its own battery, which
+     * is exactly the silent failure mode a prior overnight test ran into undetected.
+     * So this only ever toggles a small badge and pings Discord; it never touches
+     * currentState or the capture/review timers.
+     */
+    private fun applyPowerAlertEffects(effects: List<AlertEffect>) {
+        for (effect in effects) {
+            when (effect) {
+                AlertEffect.SHOW_FAULT_SCREEN -> powerWarningBanner.visibility = View.VISIBLE
+                AlertEffect.HIDE_FAULT_SCREEN -> powerWarningBanner.visibility = View.GONE
+                AlertEffect.SEND_DISCONNECT_ALERT ->
+                    discordNotifier.send(AlertMessages.powerLost(isDemoModeEnabled()), mentionEveryone = true)
+                AlertEffect.SEND_ALL_CLEAR ->
+                    discordNotifier.send(AlertMessages.powerRestored(isDemoModeEnabled()), mentionEveryone = false)
+            }
+        }
+    }
+
+    /** True if the tablet currently reports any external power source (AC/USB/wireless). */
+    private fun isOnExternalPower(): Boolean {
+        val batteryIntent = runCatching {
+            registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        }.getOrNull()
+        val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
+        return plugged > 0
+    }
+
     private fun animateSaveAndExit(onComplete: () -> Unit) {
         val screenWidth = (stillImageView.parent as View).width
 
@@ -973,7 +1017,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private val reconnectConfirmRunnable = object : Runnable {
         override fun run() {
             if (mCameraHandler?.isPreviewing == true) {
-                applyAlertEffects(cameraAlertState.onCameraBack(SystemClock.elapsedRealtime()))
+                applyAlertEffects(cameraAlertState.onBack(SystemClock.elapsedRealtime()))
             } else if (SystemClock.elapsedRealtime() < reconnectConfirmDeadlineMs) {
                 mainHandler.postDelayed(this, RECONNECT_CONFIRM_POLL_MS)
             } else {
@@ -1041,7 +1085,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // Driven via mainHandler since USBMonitor's delivery thread for this
                 // callback should not be relied upon; cameraAlertState is main-thread-only.
                 val nowMs = SystemClock.elapsedRealtime()
-                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraLost(nowMs)) }
+                mainHandler.post { applyAlertEffects(cameraAlertState.onLost(nowMs)) }
             }
 
             override fun onDettach(device: UsbDevice?) {
@@ -1051,7 +1095,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // USBMonitor delivers onDettach on its own async handler thread, not the
                 // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
                 val nowMs = SystemClock.elapsedRealtime()
-                mainHandler.post { applyAlertEffects(cameraAlertState.onCameraLost(nowMs)) }
+                mainHandler.post { applyAlertEffects(cameraAlertState.onLost(nowMs)) }
             }
 
             override fun onCancel(device: UsbDevice?) {
