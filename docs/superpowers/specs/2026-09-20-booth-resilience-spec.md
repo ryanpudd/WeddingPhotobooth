@@ -93,7 +93,7 @@ Automatic recovery is deliberately deferred until the diagnostics say what fails
 | Battery/power-state detection | `onDettach` is proven, free, already wired |
 | Discord retry / queueing | A late battery alert is noise; the screen is primary |
 | Auto-recovery ladder, camera-health watchdog | Deferred until diagnostics land |
-| Idle preview shutdown / camera cooldown | Cycles the exact path that stalls, and converts a loud failure into a silent one. Revisit only if the drain test says runtime is marginal |
+| ~~Idle preview shutdown / camera cooldown~~ | Implemented once camera-health detection landed — see `docs/superpowers/specs/2026-09-26-camera-idle-suspend-design.md` |
 | Demo-mode auto-off guard | Setup happens on the day; it would be noticed |
 | WhatsApp / SMS / Pushover | Discord is what recipients already have |
 
@@ -104,3 +104,7 @@ switches the camera off deliberately and it fails to wake, `onDettach` never
 fires, so the booth sits looking healthy while being dead and nothing alerts
 anyone. Recorded here so the reasoning is not lost when the drain test result
 makes the cooldown tempting.
+
+> **Update 2026-09-26:** camera-health detection landed in `9936cf4`, satisfying
+> this constraint. The cooldown is now designed and implemented — see
+> `docs/superpowers/specs/2026-09-26-camera-idle-suspend-design.md`.

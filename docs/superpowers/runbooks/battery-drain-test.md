@@ -67,3 +67,8 @@ Then compare the measured runtime against that recorded target:
 > If the app switches the camera off deliberately and it fails to wake,
 > `onDettach` never fires, so the booth sits looking healthy while being dead
 > and nothing alerts anyone. See the spec's "Key design constraint".
+>
+> **Update 2026-09-26:** this constraint is now satisfied and the cooldown is
+> built — see `docs/superpowers/specs/2026-09-26-camera-idle-suspend-design.md`.
+> This drain test still measures the worst case unaffected: demo mode never
+> suspends the camera, so its result is unchanged by the new feature.
