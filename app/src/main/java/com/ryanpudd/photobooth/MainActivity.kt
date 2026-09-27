@@ -105,6 +105,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var pendingCaptureAfterResume = false
     private var lastCtrlBlock: UsbControlBlock? = null
 
+    // True from the moment suspendCamera() is called until its worker-thread close() calls
+    // have actually finished. Without this, a tap landing in that window could call
+    // resumeCameraForCapture() -> mCameraHandler!!.open(ctrlBlock) concurrently with the
+    // worker thread's still-in-flight mCameraHandler?.close() / ctrlBlock?.close() on the
+    // same non-thread-safe objects, and the close-triggered onDisconnect (deferred onto
+    // mainHandler) could then read cameraSuspended as already false and wrongly declare a
+    // real fault, cancelling the legitimate resume. Taps are ignored while this is true;
+    // it is not a persistent boolean the user has to wait out — the close is fast in the
+    // healthy case, and the guest simply taps again.
+    private var suspendInProgress = false
+
     // Separate instance/debounce from cameraAlertState: losing external power doesn't
     // make the booth unusable (it just falls back to the tablet's own battery), so it
     // gets its own phase instead of sharing the camera's fault-screen state.
@@ -200,10 +211,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private fun suspendCamera() {
         Log.i(TAG, "suspending camera after ${CameraSuspendPolicy.SUSPEND_AFTER_MS}ms idle")
         cameraSuspended = true
+        suspendInProgress = true
         val ctrlBlock = lastCtrlBlock
         mWorkerHandler?.post {
             mCameraHandler?.close()
             ctrlBlock?.close()
+            mainHandler.post { suspendInProgress = false }
         }
     }
 
@@ -435,6 +448,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         btnRetake.setOnClickListener { handleRetake() }
         statusOverlayText.setOnClickListener {
             when {
+                // A suspend is still closing the camera on the worker thread: ignore the tap
+                // rather than racing resumeCameraForCapture()'s open() against that close().
+                // The guest just taps again a moment later once suspendInProgress clears.
+                suspendInProgress -> Unit
                 // First tap while suspended: start the resume, don't start a countdown yet.
                 cameraSuspended -> resumeCameraForCapture()
                 // A resume is already in flight (resumeConfirmRunnable hasn't fired yet):
