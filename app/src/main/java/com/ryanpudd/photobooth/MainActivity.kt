@@ -181,7 +181,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
         cameraSuspended = false
         pendingCaptureAfterResume = true
-        mCameraHandler!!.open(ctrlBlock)
+        try {
+            mCameraHandler!!.open(ctrlBlock)
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to reopen camera on resume", e)
+            recordCameraError("resume open() threw: ${e.message}")
+            applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
+            return
+        }
         startPreview()
         // startPreview() -> resetToIdle() just overwrote this text; set it after, not before.
         statusOverlayText.text = getString(R.string.camera_warming_up)
@@ -1167,7 +1174,16 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // Driven via mainHandler since USBMonitor's delivery thread for this
                 // callback should not be relied upon; cameraAlertState is main-thread-only.
                 val nowMs = SystemClock.elapsedRealtime()
-                mainHandler.post { applyAlertEffects(cameraAlertState.onLost(nowMs)) }
+                mainHandler.post {
+                    // A physical disconnect while suspended (or mid-resume) invalidates any
+                    // retained control block and stale suspend/pending bookkeeping — otherwise
+                    // a tap landing before the fault overlay appears could reach
+                    // resumeCameraForCapture() with a control block for a device that's gone.
+                    cameraSuspended = false
+                    pendingCaptureAfterResume = false
+                    lastCtrlBlock = null
+                    applyAlertEffects(cameraAlertState.onLost(nowMs))
+                }
             }
 
             override fun onDettach(device: UsbDevice?) {
@@ -1177,7 +1193,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // USBMonitor delivers onDettach on its own async handler thread, not the
                 // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
                 val nowMs = SystemClock.elapsedRealtime()
-                mainHandler.post { applyAlertEffects(cameraAlertState.onLost(nowMs)) }
+                mainHandler.post {
+                    // See onDisconnect: same reset, same reasoning.
+                    cameraSuspended = false
+                    pendingCaptureAfterResume = false
+                    lastCtrlBlock = null
+                    applyAlertEffects(cameraAlertState.onLost(nowMs))
+                }
             }
 
             override fun onCancel(device: UsbDevice?) {
