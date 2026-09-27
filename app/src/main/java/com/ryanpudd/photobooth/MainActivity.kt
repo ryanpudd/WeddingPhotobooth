@@ -141,30 +141,70 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }
     }
 
-    // Mirrors startupCameraCheckRunnable's pattern for the wake-from-suspend case.
-    // onConnect's reconnect-confirm path (startReconnectConfirm) assumes a real USB
-    // reconnect already happened and only "holds" whatever fault state already exists;
-    // that never applies here, since a deliberate suspend never touches cameraAlertState.
+    private var resumeConfirmDeadlineMs = 0L
+
+    // Mirrors startupCameraCheckRunnable's pattern for the wake-from-suspend case, but polls
+    // like reconnectConfirmRunnable does: the BRIO takes ~1.3-1.6s to preview after reopening,
+    // so a single fixed-delay check would make every resume wait the full grace period even
+    // when the camera comes back almost immediately. onConnect's reconnect-confirm path assumes
+    // a real USB reconnect already happened (it only "holds" whatever fault state exists), which
+    // never applies here since a deliberate suspend never touches cameraAlertState on its own.
     // This is the one place a failed resume turns into a real, alerted fault.
-    private val resumeConfirmRunnable = Runnable {
-        pendingCaptureAfterResume = false
-        if (mCameraHandler?.isPreviewing == true) {
-            startPreCaptureCountdown()
-        } else {
-            Log.w(TAG, "resume: no preview after ${RESUME_CONFIRM_DELAY_MS}ms")
-            recordCameraError(
-                "resume without preview at uptime " +
-                    "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
-            )
-            applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
+    private val resumeConfirmRunnable = object : Runnable {
+        override fun run() {
+            if (mCameraHandler?.isPreviewing == true) {
+                pendingCaptureAfterResume = false
+                // Guard exactly like demoCaptureRunnable: never force a countdown behind an
+                // open admin dialog, outside IDLE, or while a fault is independently showing.
+                if (adminDialog?.isShowing != true &&
+                    currentState == BoothState.IDLE &&
+                    cameraAlertState.phase == CameraAlertState.Phase.HEALTHY
+                ) {
+                    startPreCaptureCountdown()
+                }
+            } else if (SystemClock.elapsedRealtime() < resumeConfirmDeadlineMs) {
+                mainHandler.postDelayed(this, RECONNECT_CONFIRM_POLL_MS)
+            } else {
+                pendingCaptureAfterResume = false
+                Log.w(TAG, "resume: no preview after ${RESUME_CONFIRM_DELAY_MS}ms")
+                recordCameraError(
+                    "resume without preview at uptime " +
+                        "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
+                )
+                applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
+            }
         }
     }
 
-    /** Releases the camera session so the kernel's USB autosuspend can cut power. */
+    /**
+     * Releases the camera session so the kernel's USB autosuspend can cut power.
+     *
+     * cameraSuspended is set BEFORE calling close(): the library's close() path
+     * synchronously fires the same onDisconnect callback a real physical unplug
+     * uses (UVCCamera.close() -> UsbControlBlock.close() -> the listener), so
+     * onDisconnect must be able to tell "this is our own deliberate suspend"
+     * apart from a real disconnect — it does that by checking this flag.
+     *
+     * Also closes lastCtrlBlock directly: closing only the handler's internal
+     * clone (via mCameraHandler.close()) leaves the ORIGINAL connection retained
+     * in lastCtrlBlock open, which would likely keep the kernel from ever
+     * autosuspending the device at all. UsbControlBlock stays reusable after
+     * close() — clone() (used by resumeCameraForCapture() via mCameraHandler.open())
+     * only needs the retained device reference, not a live connection.
+     *
+     * Both calls run off the main thread: UVCCameraHandler.close() waits
+     * (unbounded) on the camera thread via stopPreview(), and this codebase
+     * already documents an undiagnosed stall on camera start/reconnect — calling
+     * close() on the main thread risks an ANR if that thread is ever wedged.
+     */
     private fun suspendCamera() {
         Log.i(TAG, "suspending camera after ${CameraSuspendPolicy.SUSPEND_AFTER_MS}ms idle")
-        mCameraHandler?.close()
         cameraSuspended = true
+        val ctrlBlock = lastCtrlBlock
+        mWorkerHandler?.post {
+            mCameraHandler?.close()
+            ctrlBlock?.close()
+        }
     }
 
     /**
@@ -176,6 +216,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         val ctrlBlock = lastCtrlBlock
         if (ctrlBlock == null) {
             Log.w(TAG, "resume requested but no control block retained from onConnect")
+            cameraSuspended = false
+            recordCameraError(
+                "resume requested with no control block retained at uptime " +
+                    "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
+            )
             applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
             return
         }
@@ -185,6 +230,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             mCameraHandler!!.open(ctrlBlock)
         } catch (e: Exception) {
             Log.w(TAG, "failed to reopen camera on resume", e)
+            pendingCaptureAfterResume = false
             recordCameraError("resume open() threw: ${e.message}")
             applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
             return
@@ -193,7 +239,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // startPreview() -> resetToIdle() just overwrote this text; set it after, not before.
         statusOverlayText.text = getString(R.string.camera_warming_up)
         mainHandler.removeCallbacks(resumeConfirmRunnable)
-        mainHandler.postDelayed(resumeConfirmRunnable, RESUME_CONFIRM_DELAY_MS)
+        resumeConfirmDeadlineMs = SystemClock.elapsedRealtime() + RESUME_CONFIRM_DELAY_MS
+        mainHandler.postDelayed(resumeConfirmRunnable, RECONNECT_CONFIRM_POLL_MS)
     }
 
     private lateinit var cameraView: UVCCameraTextureView
@@ -1175,14 +1222,18 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // callback should not be relied upon; cameraAlertState is main-thread-only.
                 val nowMs = SystemClock.elapsedRealtime()
                 mainHandler.post {
-                    // A physical disconnect while suspended (or mid-resume) invalidates any
-                    // retained control block and stale suspend/pending bookkeeping — otherwise
-                    // a tap landing before the fault overlay appears could reach
-                    // resumeCameraForCapture() with a control block for a device that's gone.
-                    cameraSuspended = false
-                    pendingCaptureAfterResume = false
-                    lastCtrlBlock = null
-                    applyAlertEffects(cameraAlertState.onLost(nowMs))
+                    // suspendCamera()'s own close() calls synchronously trigger this exact
+                    // callback (UVCCamera.close() -> UsbControlBlock.close() -> this listener),
+                    // indistinguishable at this point from a real disconnect. cameraSuspended is
+                    // set true BEFORE suspendCamera() ever calls close(), so this guard tells the
+                    // two apart: skip entirely for our own deliberate suspend (a real physical
+                    // unplug during a suspend is still caught by onDettach below, unconditionally).
+                    if (!cameraSuspended) {
+                        pendingCaptureAfterResume = false
+                        lastCtrlBlock = null
+                        mainHandler.removeCallbacks(resumeConfirmRunnable)
+                        applyAlertEffects(cameraAlertState.onLost(nowMs))
+                    }
                 }
             }
 
@@ -1192,12 +1243,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 recordCameraError("onDettach at ${System.currentTimeMillis()}")
                 // USBMonitor delivers onDettach on its own async handler thread, not the
                 // main thread, so cameraAlertState (main-thread-only) is driven via mainHandler.
+                //
+                // Unlike onDisconnect, onDettach is driven only by a real ACTION_USB_DEVICE_DETACHED
+                // broadcast, so it only ever fires for a genuine physical unplug — never for our
+                // own deliberate suspend. It always resets suspend/resume bookkeeping and always
+                // raises the fault, with no cameraSuspended guard needed.
                 val nowMs = SystemClock.elapsedRealtime()
                 mainHandler.post {
-                    // See onDisconnect: same reset, same reasoning.
                     cameraSuspended = false
                     pendingCaptureAfterResume = false
                     lastCtrlBlock = null
+                    mainHandler.removeCallbacks(resumeConfirmRunnable)
                     applyAlertEffects(cameraAlertState.onLost(nowMs))
                 }
             }
@@ -1249,10 +1305,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         /** One-shot grace period for the camera to come up from cold before we call it lost. */
         private const val STARTUP_CAMERA_CHECK_DELAY_MS = 15_000L
         /**
-         * One-shot grace period for a suspended camera to resume previewing after a
-         * wake tap. Deliberately reuses the cold-start value: resuming from a lightweight
-         * suspend should be faster than full USB enumeration, but that has not been
-         * measured on hardware yet. Tighten this once Step 9's hardware test measures it.
+         * Deadline for a suspended camera to resume previewing after a wake tap, polled
+         * every RECONNECT_CONFIRM_POLL_MS (see resumeConfirmRunnable) rather than checked
+         * once at the end. Deliberately reuses the cold-start value: resuming from a
+         * lightweight suspend should be faster than full USB enumeration, but that has not
+         * been measured on hardware yet. Tighten this once Step 10's hardware test measures it.
          */
         private const val RESUME_CONFIRM_DELAY_MS = 15_000L
         private const val RECONNECT_CONFIRM_POLL_MS = 250L
