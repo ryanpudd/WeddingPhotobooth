@@ -96,6 +96,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private val cameraAlertState = CameraAlertState()
 
+    // Camera idle-suspend: closes the camera after CameraSuspendPolicy.SUSPEND_AFTER_MS of
+    // idle to save battery, and reopens it on the next capture tap using the control block
+    // retained from the last onConnect — no new USB enumeration, no USBMonitor involvement.
+    // cameraAlertState stays HEALTHY throughout a deliberate suspend; only a failed resume
+    // (see resumeConfirmRunnable) ever raises a real fault.
+    private var cameraSuspended = false
+    private var pendingCaptureAfterResume = false
+    private var lastCtrlBlock: UsbControlBlock? = null
+
     // Separate instance/debounce from cameraAlertState: losing external power doesn't
     // make the booth unusable (it just falls back to the tablet's own battery), so it
     // gets its own phase instead of sharing the camera's fault-screen state.
@@ -130,6 +139,54 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             Log.w(TAG, "startup camera check: no preview after ${STARTUP_CAMERA_CHECK_DELAY_MS}ms")
             applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
         }
+    }
+
+    // Mirrors startupCameraCheckRunnable's pattern for the wake-from-suspend case.
+    // onConnect's reconnect-confirm path (startReconnectConfirm) assumes a real USB
+    // reconnect already happened and only "holds" whatever fault state already exists;
+    // that never applies here, since a deliberate suspend never touches cameraAlertState.
+    // This is the one place a failed resume turns into a real, alerted fault.
+    private val resumeConfirmRunnable = Runnable {
+        pendingCaptureAfterResume = false
+        if (mCameraHandler?.isPreviewing == true) {
+            startPreCaptureCountdown()
+        } else {
+            Log.w(TAG, "resume: no preview after ${RESUME_CONFIRM_DELAY_MS}ms")
+            recordCameraError(
+                "resume without preview at uptime " +
+                    "${SystemClock.elapsedRealtime() - appStartedElapsedMs}ms"
+            )
+            applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
+        }
+    }
+
+    /** Releases the camera session so the kernel's USB autosuspend can cut power. */
+    private fun suspendCamera() {
+        Log.i(TAG, "suspending camera after ${CameraSuspendPolicy.SUSPEND_AFTER_MS}ms idle")
+        mCameraHandler?.close()
+        cameraSuspended = true
+    }
+
+    /**
+     * Reopens a suspended camera using the control block retained from the last onConnect.
+     * Deliberately does not start the capture countdown itself — resumeConfirmRunnable does,
+     * once the resumed camera is confirmed actually previewing.
+     */
+    private fun resumeCameraForCapture() {
+        val ctrlBlock = lastCtrlBlock
+        if (ctrlBlock == null) {
+            Log.w(TAG, "resume requested but no control block retained from onConnect")
+            applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
+            return
+        }
+        cameraSuspended = false
+        pendingCaptureAfterResume = true
+        mCameraHandler!!.open(ctrlBlock)
+        startPreview()
+        // startPreview() -> resetToIdle() just overwrote this text; set it after, not before.
+        statusOverlayText.text = getString(R.string.camera_warming_up)
+        mainHandler.removeCallbacks(resumeConfirmRunnable)
+        mainHandler.postDelayed(resumeConfirmRunnable, RESUME_CONFIRM_DELAY_MS)
     }
 
     private lateinit var cameraView: UVCCameraTextureView
@@ -201,6 +258,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             }
             applyPowerAlertEffects(powerAlertState.onTick(SystemClock.elapsedRealtime()))
 
+            if (CameraSuspendPolicy.shouldSuspend(
+                    currentState = currentState,
+                    cameraSuspended = cameraSuspended,
+                    demoMode = isDemoModeEnabled(),
+                    adminDialogShowing = adminDialog?.isShowing == true,
+                    msSinceLastTouch = SystemClock.elapsedRealtime() - lastTouchElapsedMs
+                )
+            ) {
+                suspendCamera()
+            }
+
             applyBrightness()
             mainHandler.postDelayed(this, 5000)
         }
@@ -232,6 +300,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         mainHandler.removeCallbacks(gearHideRunnable)
         mainHandler.removeCallbacks(demoCaptureRunnable)
         mainHandler.removeCallbacks(startupCameraCheckRunnable)
+        mainHandler.removeCallbacks(resumeConfirmRunnable)
         mainHandler.removeCallbacks(reconnectConfirmRunnable)
         // The USB alert wiring posts anonymous lambdas (onConnect/onDisconnect/onDettach)
         // that can't be removed by reference above. mUSBMonitor is never unregistered, so
@@ -311,8 +380,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         btnKeep.setOnClickListener { handleKeep() }
         btnRetake.setOnClickListener { handleRetake() }
         statusOverlayText.setOnClickListener {
-            if (currentState == BoothState.IDLE) {
-                startPreCaptureCountdown()
+            when {
+                // First tap while suspended: start the resume, don't start a countdown yet.
+                cameraSuspended -> resumeCameraForCapture()
+                // A resume is already in flight (resumeConfirmRunnable hasn't fired yet):
+                // ignore extra taps rather than starting a countdown against a camera that
+                // may not be previewing yet.
+                pendingCaptureAfterResume -> Unit
+                currentState == BoothState.IDLE -> startPreCaptureCountdown()
             }
         }
 
@@ -1055,6 +1130,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 createNew: Boolean
             ) {
                 //if (MainActivity.DEBUG) Log.v(MainActivity.TAG, "onConnect:")
+                // Retained so a later idle-suspend can reopen the camera without a real USB
+                // reconnect. Also clears any stale suspended/pending state from a physical
+                // unplug that happened while the camera was suspended — onConnect always means
+                // the camera session is (re)opening for real, regardless of how it got here.
+                lastCtrlBlock = ctrlBlock
+                cameraSuspended = false
+                pendingCaptureAfterResume = false
                 mCameraHandler!!.open(ctrlBlock)
                 startPreview()
                 // USBMonitor delivers onConnect on its own async handler thread, not the
@@ -1144,6 +1226,13 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         private const val GEAR_VISIBLE_MS = 8_000L
         /** One-shot grace period for the camera to come up from cold before we call it lost. */
         private const val STARTUP_CAMERA_CHECK_DELAY_MS = 15_000L
+        /**
+         * One-shot grace period for a suspended camera to resume previewing after a
+         * wake tap. Deliberately reuses the cold-start value: resuming from a lightweight
+         * suspend should be faster than full USB enumeration, but that has not been
+         * measured on hardware yet. Tighten this once Step 9's hardware test measures it.
+         */
+        private const val RESUME_CONFIRM_DELAY_MS = 15_000L
         private const val RECONNECT_CONFIRM_POLL_MS = 250L
         private const val RECONNECT_CONFIRM_TIMEOUT_MS = 8_000L
         /** A still capture that gets no frame in this long is abandoned. */
