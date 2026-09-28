@@ -105,6 +105,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private var pendingCaptureAfterResume = false
     private var lastCtrlBlock: UsbControlBlock? = null
 
+    // UsbControlBlock only holds a WeakReference<UsbDevice> internally (see USBMonitor's
+    // getDevice()), which clone() dereferences on every resume. Confirmed on hardware: over
+    // a 3-minute suspend with no other strong reference to the UsbDevice anywhere, the GC
+    // collects it, and clone() throws CloneNotSupportedException("device may already be
+    // removed") — every resume attempt fails. This field's only job is to hold a strong
+    // reference for as long as lastCtrlBlock might still be reused, so the weak one behind
+    // it never clears.
+    private var lastUsbDevice: UsbDevice? = null
+
     // True from the moment suspendCamera() is called until its worker-thread close() calls
     // have actually finished. Without this, a tap landing in that window could call
     // resumeCameraForCapture() -> mCameraHandler!!.open(ctrlBlock) concurrently with the
@@ -1206,6 +1215,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // unplug that happened while the camera was suspended — onConnect always means
                 // the camera session is (re)opening for real, regardless of how it got here.
                 lastCtrlBlock = ctrlBlock
+                lastUsbDevice = device
                 cameraSuspended = false
                 pendingCaptureAfterResume = false
                 mCameraHandler!!.open(ctrlBlock)
@@ -1248,6 +1258,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     if (!cameraSuspended) {
                         pendingCaptureAfterResume = false
                         lastCtrlBlock = null
+                        lastUsbDevice = null
                         mainHandler.removeCallbacks(resumeConfirmRunnable)
                         applyAlertEffects(cameraAlertState.onLost(nowMs))
                     }
@@ -1270,6 +1281,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                     cameraSuspended = false
                     pendingCaptureAfterResume = false
                     lastCtrlBlock = null
+                    lastUsbDevice = null
                     mainHandler.removeCallbacks(resumeConfirmRunnable)
                     applyAlertEffects(cameraAlertState.onLost(nowMs))
                 }
