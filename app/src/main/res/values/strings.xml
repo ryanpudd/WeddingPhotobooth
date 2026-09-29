@@ -40,4 +40,5 @@
     <string name="demo_mode_banner">DEMO MODE</string>
     <string name="power_warning_banner">🔋 NO EXTERNAL POWER</string>
     <string name="camera_warming_up">Getting ready…</string>
+    <string name="low_battery_lock_text">Zzz… low battery, taking a nap</string>
 </resources>

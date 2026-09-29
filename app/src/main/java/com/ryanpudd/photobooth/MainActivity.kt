@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     private lateinit var btnRetake: Button
     private lateinit var btnAdminGear: ImageButton
     private lateinit var faultOverlay: TextView
+    private lateinit var lowBatteryOverlay: TextView
     private lateinit var demoBanner: TextView
     private lateinit var powerWarningBanner: TextView
 
@@ -129,6 +130,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     // make the booth unusable (it just falls back to the tablet's own battery), so it
     // gets its own phase instead of sharing the camera's fault-screen state.
     private val powerAlertState = CameraAlertState()
+
+    // Third reuse of CameraAlertState: the tablet's OWN battery (not the external pack
+    // powerAlertState already tracks) crossing the LowBatteryPolicy hysteresis band. Locking
+    // pins currentState to IDLE and shows lowBatteryOverlay, exactly like the camera fault
+    // screen; the 30s Discord debounce this class already provides is more than enough here.
+    private val lowBatteryAlertState = CameraAlertState()
 
     private lateinit var uploadWorker: UploadWorker
     private val gearHideRunnable = Runnable { btnAdminGear.visibility = View.GONE }
@@ -345,6 +352,23 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 suspendCamera()
             }
 
+            // Deliberately applies in demo mode too: demo mode is what runs the battery
+            // drain test, and the tablet's own battery can and does deplete during it when
+            // the external pack can't keep up. Unlike CameraSuspendPolicy, there is no
+            // demo-mode exemption here.
+            //
+            // readTabletBatteryPercent() can return -1 (platform can't report a level);
+            // LowBatteryPolicy.shouldBeLocked handles that by returning currentlyLocked
+            // unchanged, so calling onLost()/onBack() from that unchanged value is always
+            // safe here — both are no-ops when the phase wouldn't actually change.
+            val currentlyLocked = lowBatteryAlertState.phase != CameraAlertState.Phase.HEALTHY
+            if (LowBatteryPolicy.shouldBeLocked(currentlyLocked, currentState, readTabletBatteryPercent())) {
+                applyLowBatteryAlertEffects(lowBatteryAlertState.onLost(SystemClock.elapsedRealtime()))
+            } else {
+                applyLowBatteryAlertEffects(lowBatteryAlertState.onBack(SystemClock.elapsedRealtime()))
+            }
+            applyLowBatteryAlertEffects(lowBatteryAlertState.onTick(SystemClock.elapsedRealtime()))
+
             applyBrightness()
             mainHandler.postDelayed(this, 5000)
         }
@@ -448,6 +472,10 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         demoBanner = findViewById(R.id.demoBanner)
         syncDemoBanner()
         powerWarningBanner = findViewById(R.id.powerWarningBanner)
+        lowBatteryOverlay = findViewById(R.id.lowBatteryOverlay)
+        // Design-time XML string is a preview only; the tested copy wins at runtime, same
+        // reasoning as faultOverlay.text a few lines above this in the diff.
+        lowBatteryOverlay.text = AlertMessages.LOW_BATTERY_SCREEN_TEXT
         // Must run after the views above are bound: applyBrightness() now reads
         // faultOverlay.visibility (M2), which is lateinit until findViewById above.
         applyBrightness()
@@ -478,6 +506,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // alone is not enough once the overlay is up.
         rootLayout.setOnLongClickListener(revealGear)
         faultOverlay.setOnLongClickListener(revealGear)
+        lowBatteryOverlay.setOnLongClickListener(revealGear)
         btnAdminGear.setOnClickListener { showAdminPinDialog() }
     }
 
@@ -545,7 +574,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // exactly what happens during a real outage.
         val target = BrightnessPolicy.brightnessFor(
             demoMode = isDemoModeEnabled(),
-            isIdle = currentState == BoothState.IDLE && faultOverlay.visibility != View.VISIBLE,
+            isIdle = currentState == BoothState.IDLE &&
+                faultOverlay.visibility != View.VISIBLE &&
+                lowBatteryOverlay.visibility != View.VISIBLE,
             msSinceLastTouch = SystemClock.elapsedRealtime() - lastTouchElapsedMs
         )
         if (target == appliedBrightness) return
@@ -1023,6 +1054,40 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         }.getOrNull()
         val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
         return plugged > 0
+    }
+
+    /**
+     * Applies the low-battery lockout's decisions. Main thread only. Mirrors
+     * applyAlertEffects for the camera fault screen: locking pins currentState back to
+     * IDLE via resetToIdle() so an interrupted countdown/review never keeps running behind
+     * the overlay, and the overlay itself swallows taps (see the layout's clickable="true").
+     */
+    private fun applyLowBatteryAlertEffects(effects: List<AlertEffect>) {
+        for (effect in effects) {
+            when (effect) {
+                AlertEffect.SHOW_FAULT_SCREEN -> {
+                    resetToIdle()
+                    lowBatteryOverlay.visibility = View.VISIBLE
+                }
+                AlertEffect.HIDE_FAULT_SCREEN -> lowBatteryOverlay.visibility = View.GONE
+                AlertEffect.SEND_DISCONNECT_ALERT ->
+                    discordNotifier.send(AlertMessages.lowBatteryLock(isDemoModeEnabled()), mentionEveryone = true)
+                AlertEffect.SEND_ALL_CLEAR ->
+                    discordNotifier.send(AlertMessages.lowBatteryUnlock(isDemoModeEnabled()), mentionEveryone = false)
+            }
+        }
+    }
+
+    /**
+     * The tablet's own battery percentage (0-100), or -1 if the platform can't report one.
+     * LowBatteryPolicy.shouldBeLocked treats -1 as "no new information" (see its own
+     * doc comment) rather than a real reading, so callers can pass this straight through.
+     */
+    private fun readTabletBatteryPercent(): Int {
+        return runCatching {
+            (getSystemService(BATTERY_SERVICE) as BatteryManager)
+                .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        }.getOrDefault(-1)
     }
 
     private fun animateSaveAndExit(onComplete: () -> Unit) {

@@ -172,4 +172,22 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/demoBanner" />
 
+    <!-- Low-battery lockout — drawn last so it takes priority even over the
+         camera fault overlay. Same pattern as faultOverlay: full-screen,
+         clickable swallows taps, long-press still reveals the admin gear. -->
+    <TextView
+        android:id="@+id/lowBatteryOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:padding="48dp"
+        android:text="@string/low_battery_lock_text"
+        android:textColor="#FFFFFF"
+        android:textSize="40sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>
