@@ -104,6 +104,11 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     // (see resumeConfirmRunnable) ever raises a real fault.
     private var cameraSuspended = false
     private var pendingCaptureAfterResume = false
+    // BoothState never assigns COUNTDOWN_PRECAPTURE (see that enum's own doc comment) —
+    // currentState stays IDLE for the whole 3s pre-capture countdown. This flag is the
+    // only signal that a countdown is actually in flight, so the low-battery heartbeat
+    // check can avoid locking (and cancelling it via resetToIdle()) out from under a guest.
+    private var preCaptureCountdownActive = false
     private var lastCtrlBlock: UsbControlBlock? = null
 
     // UsbControlBlock only holds a WeakReference<UsbDevice> internally (see USBMonitor's
@@ -182,10 +187,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             if (mCameraHandler?.isPreviewing == true) {
                 pendingCaptureAfterResume = false
                 // Guard exactly like demoCaptureRunnable: never force a countdown behind an
-                // open admin dialog, outside IDLE, or while a fault is independently showing.
+                // open admin dialog, outside IDLE, while a camera fault is independently
+                // showing, or while the low-battery lock is up.
                 if (adminDialog?.isShowing != true &&
                     currentState == BoothState.IDLE &&
-                    cameraAlertState.phase == CameraAlertState.Phase.HEALTHY
+                    cameraAlertState.phase == CameraAlertState.Phase.HEALTHY &&
+                    lowBatteryAlertState.phase == CameraAlertState.Phase.HEALTHY
                 ) {
                     startPreCaptureCountdown()
                 }
@@ -362,7 +369,18 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             // unchanged, so calling onLost()/onBack() from that unchanged value is always
             // safe here — both are no-ops when the phase wouldn't actually change.
             val currentlyLocked = lowBatteryAlertState.phase != CameraAlertState.Phase.HEALTHY
-            if (LowBatteryPolicy.shouldBeLocked(currentlyLocked, currentState, readTabletBatteryPercent())) {
+            // LowBatteryPolicy's IDLE-only lock gate assumes currentState reflects whether a
+            // guest is mid-capture-flow, but BoothState never distinguishes "mid pre-capture
+            // countdown" or "mid resume wait" from IDLE (see preCaptureCountdownActive's own
+            // doc comment). Substitute a non-IDLE placeholder during those windows so a new
+            // lock is never decided (and resetToIdle() never fires) out from under a guest who
+            // is already interacting — this never touches the real currentState.
+            val effectiveStateForLowBattery = if (preCaptureCountdownActive || pendingCaptureAfterResume) {
+                BoothState.CAPTURING
+            } else {
+                currentState
+            }
+            if (LowBatteryPolicy.shouldBeLocked(currentlyLocked, effectiveStateForLowBattery, readTabletBatteryPercent())) {
                 applyLowBatteryAlertEffects(lowBatteryAlertState.onLost(SystemClock.elapsedRealtime()))
             } else {
                 applyLowBatteryAlertEffects(lowBatteryAlertState.onBack(SystemClock.elapsedRealtime()))
@@ -383,7 +401,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             if (isDemoModeEnabled() &&
                 currentState == BoothState.IDLE &&
                 adminDialog?.isShowing != true &&
-                mCameraHandler?.isPreviewing == true
+                mCameraHandler?.isPreviewing == true &&
+                lowBatteryAlertState.phase == CameraAlertState.Phase.HEALTHY
             ) {
                 startPreCaptureCountdown()
             }
@@ -591,6 +610,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     }
 
     private fun resetToCapture() {
+        preCaptureCountdownActive = false
         reviewTimer?.cancel()
         preCaptureTimer?.cancel()
         mainHandler.removeCallbacks(captureRunnable)
@@ -619,6 +639,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private fun startPreCaptureCountdown() {
         resetToCapture()
+        preCaptureCountdownActive = true
 
         preCaptureTimer = object : CountDownTimer(3000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
@@ -627,6 +648,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             }
 
             override fun onFinish() {
+                preCaptureCountdownActive = false
                 currentState = BoothState.CAPTURING
                 statusOverlayText.text = getString(R.string.smile)
 
@@ -1082,12 +1104,20 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
      * The tablet's own battery percentage (0-100), or -1 if the platform can't report one.
      * LowBatteryPolicy.shouldBeLocked treats -1 as "no new information" (see its own
      * doc comment) rather than a real reading, so callers can pass this straight through.
+     *
+     * Uses the same sticky ACTION_BATTERY_CHANGED intent isOnExternalPower() already reads
+     * in this file, rather than BatteryManager.getIntProperty: that call can return 0 (not
+     * -1) as its failure value on some platform versions, which would be indistinguishable
+     * from a real empty battery, and this way is consistent with how the rest of this file
+     * already reads battery state.
      */
     private fun readTabletBatteryPercent(): Int {
-        return runCatching {
-            (getSystemService(BATTERY_SERVICE) as BatteryManager)
-                .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        }.getOrDefault(-1)
+        val batteryIntent = runCatching {
+            registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        }.getOrNull()
+        val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        return if (level < 0 || scale <= 0) -1 else level * 100 / scale
     }
 
     private fun animateSaveAndExit(onComplete: () -> Unit) {
