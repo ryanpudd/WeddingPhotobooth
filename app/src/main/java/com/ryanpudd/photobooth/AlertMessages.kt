@@ -35,13 +35,17 @@ object AlertMessages {
 
     /** Shown full-screen the instant the tablet's own battery hits 20%. */
     const val LOW_BATTERY_SCREEN_TEXT = "😴 Whoa there, superstars — you've partied my " +
-        "battery right into the ground. I need a little nap. Find someone with a charger and " +
-        "I'll be back for more smiles soon!"
+        "battery right into the ground. I'm taking a quick nap to recharge myself — no need to " +
+        "do anything, I'll be back for more smiles soon!"
 
     fun lowBatteryLock(isDemoMode: Boolean): String {
-        val body = "😴 @everyone **The photobooth needs a nap** — tablet battery's down to " +
-            "20%. Plug it into a charger (or swap the pack) and it'll wake itself back up once " +
-            "it's above 50%."
+        // No call to action here: the tablet stays on the same pack the whole night for the
+        // OTG splitter to work at all, so it recharges itself once the load drops — nobody
+        // needs to go plug anything in. A pack that actually dies is a different situation,
+        // already covered by disconnect()'s alert when the camera itself drops.
+        val body = "😴 @everyone **The photobooth is taking a nap** — tablet battery's down to " +
+            "20%. Nothing to do here: it recharges itself off the same pack and will wake back " +
+            "up once it's above 50%."
         return if (isDemoMode) TEST_PREFIX + body else body
     }
 

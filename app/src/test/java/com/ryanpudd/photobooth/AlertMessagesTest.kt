@@ -72,18 +72,25 @@ class AlertMessagesTest {
     fun lowBatteryScreenText_isTheExactAgreedCopy() {
         assertEquals(
             "😴 Whoa there, superstars — you've partied my battery right into the " +
-                "ground. I need a little nap. Find someone with a charger and I'll be back for more " +
-                "smiles soon!",
+                "ground. I'm taking a quick nap to recharge myself — no need to do anything, " +
+                "I'll be back for more smiles soon!",
             AlertMessages.LOW_BATTERY_SCREEN_TEXT
         )
     }
 
     @Test
-    fun lowBatteryLock_mentionsEveryoneAndExplainsTheFix() {
+    fun lowBatteryLock_mentionsEveryoneAndDoesNotAskForAction() {
+        // The tablet stays on the same pack the whole night for the OTG splitter to work at
+        // all, so it recharges itself once the load drops — this message must never suggest
+        // someone needs to go plug something in (that's disconnect()'s alert, a different
+        // situation: the camera itself dropping because the pack actually died).
         val message = AlertMessages.lowBatteryLock(isDemoMode = false)
         assertTrue(message.contains("@everyone"))
         assertTrue(message.contains("battery"))
         assertFalse(message.contains("[TEST]"))
+        assertFalse(message.contains("plug", ignoreCase = true))
+        assertFalse(message.contains("charger", ignoreCase = true))
+        assertFalse(message.contains("swap", ignoreCase = true))
     }
 
     @Test
