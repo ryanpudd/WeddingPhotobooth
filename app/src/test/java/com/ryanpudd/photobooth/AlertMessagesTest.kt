@@ -67,4 +67,42 @@ class AlertMessagesTest {
     fun powerRestored_inDemoMode_isPrefixed() {
         assertTrue(AlertMessages.powerRestored(isDemoMode = true).startsWith("[TEST]"))
     }
+
+    @Test
+    fun lowBatteryScreenText_isTheExactAgreedCopy() {
+        assertEquals(
+            "😴 Whoa there, superstars — you've partied my battery right into the " +
+                "ground. I need a little nap. Find someone with a charger and I'll be back for more " +
+                "smiles soon!",
+            AlertMessages.LOW_BATTERY_SCREEN_TEXT
+        )
+    }
+
+    @Test
+    fun lowBatteryLock_mentionsEveryoneAndExplainsTheFix() {
+        val message = AlertMessages.lowBatteryLock(isDemoMode = false)
+        assertTrue(message.contains("@everyone"))
+        assertTrue(message.contains("battery"))
+        assertFalse(message.contains("[TEST]"))
+    }
+
+    @Test
+    fun lowBatteryLock_inDemoMode_isPrefixedSoHelpersDoNotPanic() {
+        val message = AlertMessages.lowBatteryLock(isDemoMode = true)
+        assertTrue(message.startsWith("[TEST]"))
+        assertTrue(message.contains("@everyone"))
+    }
+
+    @Test
+    fun lowBatteryUnlock_saysItsBackAndDoesNotMentionEveryone() {
+        val message = AlertMessages.lowBatteryUnlock(isDemoMode = false)
+        assertTrue(message.contains("back"))
+        assertFalse(message.contains("@everyone"))
+        assertFalse(message.contains("[TEST]"))
+    }
+
+    @Test
+    fun lowBatteryUnlock_inDemoMode_isPrefixed() {
+        assertTrue(AlertMessages.lowBatteryUnlock(isDemoMode = true).startsWith("[TEST]"))
+    }
 }
