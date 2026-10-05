@@ -142,6 +142,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     // screen; the 30s Discord debounce this class already provides is more than enough here.
     private val lowBatteryAlertState = CameraAlertState()
 
+    // Mirrors lowBatteryAlertState.phase but @Volatile so onConnect's USBMonitor callback
+    // thread (not the main thread — see its own comment) can read it safely: CameraAlertState
+    // itself is main-thread-only, and this codebase never touches it off that thread. Written
+    // only from applyLowBatteryAlertEffects, on the main thread.
+    @Volatile private var lowBatteryLocked = false
+
     private lateinit var uploadWorker: UploadWorker
     private val gearHideRunnable = Runnable { btnAdminGear.visibility = View.GONE }
 
@@ -166,8 +172,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     // check, not a watchdog: a normal onConnect has already driven onCameraBack by the time
     // it runs, making it a no-op in the healthy case. A repeating health check is explicitly
     // out of scope (spec line 95).
+    //
+    // cameraSuspended guard: a cold start while locked for low battery leaves onConnect's
+    // camera deliberately unopened (see onConnect's lowBatteryLocked check) — that is not a
+    // fault and must not raise one. Same reasoning as resumeConfirmRunnable's success path.
     private val startupCameraCheckRunnable = Runnable {
-        if (mCameraHandler?.isPreviewing != true) {
+        if (mCameraHandler?.isPreviewing != true && !cameraSuspended) {
             Log.w(TAG, "startup camera check: no preview after ${STARTUP_CAMERA_CHECK_DELAY_MS}ms")
             applyAlertEffects(cameraAlertState.onLost(SystemClock.elapsedRealtime()))
         }
@@ -1090,8 +1100,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 AlertEffect.SHOW_FAULT_SCREEN -> {
                     resetToIdle()
                     lowBatteryOverlay.visibility = View.VISIBLE
+                    lowBatteryLocked = true
                 }
-                AlertEffect.HIDE_FAULT_SCREEN -> lowBatteryOverlay.visibility = View.GONE
+                AlertEffect.HIDE_FAULT_SCREEN -> {
+                    lowBatteryOverlay.visibility = View.GONE
+                    lowBatteryLocked = false
+                }
                 AlertEffect.SEND_DISCONNECT_ALERT ->
                     discordNotifier.send(AlertMessages.lowBatteryLock(isDemoModeEnabled()), mentionEveryone = true)
                 AlertEffect.SEND_ALL_CLEAR ->
@@ -1311,8 +1325,18 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 // the camera session is (re)opening for real, regardless of how it got here.
                 lastCtrlBlock = ctrlBlock
                 lastUsbDevice = device
-                cameraSuspended = false
                 pendingCaptureAfterResume = false
+                // A reconnect while locked for low battery must not power the camera back up —
+                // that defeats the whole point of the lock (and was observed live: the camera
+                // visibly started previewing again under the lock overlay after an OTG
+                // reconnect). Leave it suspended — the same state a guest's tap already knows
+                // how to resume via resumeCameraForCapture() — until the lock lifts and the
+                // booth is next touched.
+                if (lowBatteryLocked) {
+                    cameraSuspended = true
+                    return
+                }
+                cameraSuspended = false
                 mCameraHandler!!.open(ctrlBlock)
                 startPreview()
                 // USBMonitor delivers onConnect on its own async handler thread, not the
