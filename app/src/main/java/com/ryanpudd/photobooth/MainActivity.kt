@@ -586,9 +586,17 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
     // taps and blocks a countdown against a dead camera) - so a tap on the
     // idle screen both wakes the display and starts the countdown in one go,
     // while a tap on the fault overlay only wakes the display.
+    //
+    // lowBatteryOverlay is the one exception: while it's up, the whole point is
+    // conserving power so the battery can recover, so a tap must NOT wake the
+    // display back to full brightness. The tap still reaches the overlay below
+    // (swallowed by its clickable="true", same as faultOverlay) — only the
+    // brightness wake is skipped.
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        lastTouchElapsedMs = SystemClock.elapsedRealtime()
-        applyBrightness()
+        if (lowBatteryOverlay.visibility != View.VISIBLE) {
+            lastTouchElapsedMs = SystemClock.elapsedRealtime()
+            applyBrightness()
+        }
         return super.dispatchTouchEvent(ev)
     }
 
