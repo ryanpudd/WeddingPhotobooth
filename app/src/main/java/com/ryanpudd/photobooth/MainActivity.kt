@@ -601,11 +601,14 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         // SHOW_FAULT_SCREEN pins currentState to IDLE, so without the overlay check the booth
         // would dim its own emergency message to 30% after 30s of nobody touching it — which is
         // exactly what happens during a real outage.
+        //
+        // lowBatteryOverlay is deliberately NOT exempted here, unlike faultOverlay: its whole
+        // message is "no action needed, I'll recover on my own" — nobody needs to walk over and
+        // read it at full brightness — and the entire point of the lock is conserving power, so
+        // staying lit at ACTIVE for however long recovery takes would fight its own purpose.
         val target = BrightnessPolicy.brightnessFor(
             demoMode = isDemoModeEnabled(),
-            isIdle = currentState == BoothState.IDLE &&
-                faultOverlay.visibility != View.VISIBLE &&
-                lowBatteryOverlay.visibility != View.VISIBLE,
+            isIdle = currentState == BoothState.IDLE && faultOverlay.visibility != View.VISIBLE,
             msSinceLastTouch = SystemClock.elapsedRealtime() - lastTouchElapsedMs
         )
         if (target == appliedBrightness) return
