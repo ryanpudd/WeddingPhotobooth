@@ -475,7 +475,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
         // Initialize the camera
         cameraView = findViewById(R.id.camera_view)
-        cameraView.scaleX = -1f // Mirror the preview
+        // Sets the preview transform (selfie mirror, plus the 180° flip on an inverted mount)
+        // and the screen orientation, so a reboot comes back up the way the booth is mounted.
+        applyInvertedMount()
 
         mUVCCameraView = cameraView as CameraViewInterface
         mUVCCameraView?.aspectRatio = mPreviewWidth / mPreviewHeight.toDouble()
@@ -578,6 +580,15 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
 
     private fun syncDemoBanner() {
         demoBanner.visibility = if (isDemoModeEnabled()) View.VISIBLE else View.GONE
+    }
+
+    /** Main thread only. Safe to call again on a live camera: a 180° turn keeps the landscape configuration. */
+    private fun applyInvertedMount() {
+        val inverted = InvertedMountStore.isEnabled(this)
+        requestedOrientation = InvertedMountPolicy.screenOrientation(inverted)
+        val mirror = InvertedMountPolicy.mirrorTransform(inverted)
+        cameraView.scaleX = mirror.scaleX
+        cameraView.scaleY = mirror.scaleY
     }
 
     // Task 8: any touch anywhere wakes the screen. Returning super means the
@@ -733,6 +744,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         playFlash()
         val generation = ++captureGeneration
         val view = mUVCCameraView!!
+        // Read here on the main thread so a capture always matches the preview it was framed in.
+        val mirror = InvertedMountPolicy.mirrorTransform(InvertedMountStore.isEnabled(this))
         mainHandler.postDelayed({
             if (generation == captureGeneration && currentState == BoothState.CAPTURING) {
                 Log.w(TAG, "takePhoto: no frame after ${CAPTURE_TIMEOUT_MS}ms, aborting")
@@ -745,7 +758,7 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             try {
                 val source = view.captureStillImage()
                 if (generation != captureGeneration || source == null) return@Thread
-                val matrix = Matrix().apply { preScale(-1f, 1f) }
+                val matrix = Matrix().apply { preScale(mirror.scaleX, mirror.scaleY) }
                 val copy = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, false)
                 mainHandler.post {
                     if (generation != captureGeneration) {
@@ -960,6 +973,9 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
         val checkDemoMode = view.findViewById<CheckBox>(R.id.checkDemoMode)
         checkDemoMode.isChecked = isDemoModeEnabled()
 
+        val checkInvertedMount = view.findViewById<CheckBox>(R.id.checkInvertedMount)
+        checkInvertedMount.isChecked = InvertedMountStore.isEnabled(this)
+
         adminDialog = AlertDialog.Builder(this)
             .setTitle(R.string.admin_settings_title)
             .setView(view)
@@ -977,10 +993,12 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
                 }
 
                 // M6: written before the credentials validation below, which short-circuits
-                // with return@setPositiveButton. On a partly configured booth the demo toggle
-                // would otherwise silently refuse to persist.
+                // with return@setPositiveButton. On a partly configured booth the demo and
+                // inverted mount toggles would otherwise silently refuse to persist.
                 DemoModeStore.setEnabled(this, checkDemoMode.isChecked)
                 syncDemoBanner()
+                InvertedMountStore.setEnabled(this, checkInvertedMount.isChecked)
+                applyInvertedMount()
 
                 if (accessKeyId.isBlank() || secretKey.isBlank() || bucket.isBlank() || region.isBlank()) {
                     Toast.makeText(this, R.string.admin_settings_incomplete, Toast.LENGTH_SHORT).show()

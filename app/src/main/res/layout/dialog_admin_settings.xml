@@ -107,6 +107,13 @@
             android:layout_marginTop="16dp"
             android:text="@string/label_demo_mode" />
 
+        <CheckBox
+            android:id="@+id/checkInvertedMount"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/label_inverted_mount" />
+
     </LinearLayout>
 
 </ScrollView>
