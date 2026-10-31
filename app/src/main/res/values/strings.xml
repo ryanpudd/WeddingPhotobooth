@@ -37,6 +37,7 @@
     <string name="toast_no_webhook">No Discord webhook configured</string>
     <string name="fault_battery_swap">Booth needs a battery swap, find someone to help</string>
     <string name="label_demo_mode">Demo mode (auto-capture every minute)</string>
+    <string name="label_inverted_mount">Booth mounted upside down</string>
     <string name="demo_mode_banner">DEMO MODE</string>
     <string name="power_warning_banner">🔋 NO EXTERNAL POWER</string>
     <string name="camera_warming_up">Getting ready…</string>
