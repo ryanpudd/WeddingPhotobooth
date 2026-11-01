@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: crop rule</title>
+<style>
+  :root { --accent: #8a5a12; --ink: #222; --muted: #777; --line: #e3ddd2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--ink); background: #faf8f4; }
+  header { padding: 18px 24px 8px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .banner { display: inline-block; background: #fbe9c6; color: #6b4a10; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .intro { max-width: 1000px; color: #444; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 0; }
+  aside { position: sticky; top: 0; height: 100vh; overflow: auto; padding: 12px 18px 40px 24px; border-right: 1px solid var(--line); background: #fff; }
+  aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; }
+  label { display: block; margin: 6px 0; }
+  label .v { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; }
+  .hint { color: var(--muted); font-size: 12px; margin: -2px 0 6px; }
+  main { padding: 10px 20px 60px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+  .tabs button { border: 1px solid var(--line); background: #fff; padding: 5px 10px; border-radius: 16px; cursor: pointer; font: inherit; }
+  .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .scenario { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; max-width: 1100px; }
+  .summary { margin: 8px 0 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .summary b { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(620px, 1fr)); gap: 14px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .card.flag { border-color: #d9534f; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: start; }
+  canvas { width: 100%; height: auto; display: block; background: #eee; border-radius: 3px; }
+  .cap { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; }
+  .cap .name { color: var(--muted); }
+  .cap .flags { color: #c0392b; }
+  .cap select { font: inherit; font-size: 12px; }
+  .legend span { display: inline-block; margin-right: 10px; font-size: 12px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="banner">PROTOTYPE · throwaway · branch prototype/crop-rule</span>
+  <h1>What rule turns detected content into a crop?</h1>
+  <p class="intro">Every test photo, with what detection found drawn on the left and the framed photo it would produce on the right.
+  Move the controls to change the rule; every card updates. The question is which settings make the crops look right across all the photos,
+  especially the awkward ones in the tabs. Detection ran once (RF-DETR Nano for people and objects, RTMPose for body keypoints); everything you
+  change here is the rule applied to those detections.</p>
+  <div class="legend">
+    <span><i class="sw" style="background:#2e86de"></i>primary person</span>
+    <span><i class="sw" style="background:#aaa"></i>secondary / fragment</span>
+    <span><i class="sw" style="background:#f39c12"></i>hand area</span>
+    <span><i class="sw" style="background:#8e44ad"></i>held object</span>
+    <span><i class="sw" style="background:#e84393"></i>face</span>
+    <span><i class="sw" style="background:#27ae60"></i>must-keep area (content + margin)</span>
+    <span><i class="sw" style="background:#e74c3c"></i>crop</span>
+    <span><i class="sw" style="background:#fff;border:1px dashed #e74c3c"></i>clear area inside the crop</span>
+  </div>
+</header>
+<div class="layout">
+<aside id="controls"></aside>
+<main>
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario" id="scenario"></div>
+  <div class="summary" id="summary"></div>
+  <div class="grid" id="grid"></div>
+</main>
+</div>
+
+<script src="data.js"></script>
+
+<!-- ===================== The rule: pure functions, no DOM ===================== -->
+<script>
+const CropRule = (() => {
+  const HOLDABLE = new Set(["umbrella","frisbee","sports ball","kite","baseball bat","tennis racket","bottle","wine glass",
+    "cup","fork","knife","spoon","banana","apple","cell phone","book","clock","scissors","teddy bear","toothbrush","remote","tie"]);
+  const box = (x0, y0, x1, y1) => ({ x0, y0, x1, y1 });
+  const w = b => b.x1 - b.x0, h = b => b.y1 - b.y0, area = b => Math.max(0, w(b)) * Math.max(0, h(b));
+  const union = (a, b) => a ? box(Math.min(a.x0, b.x0), Math.min(a.y0, b.y0), Math.max(a.x1, b.x1), Math.max(a.y1, b.y1)) : { ...b };
+  const inter = (a, b) => box(Math.max(a.x0, b.x0), Math.max(a.y0, b.y0), Math.min(a.x1, b.x1), Math.min(a.y1, b.y1));
+  const overlaps = (a, b) => w(inter(a, b)) > 0 && h(inter(a, b)) > 0;
+  const iou = (a, b) => { const i = area(inter(a, b)); return i / (area(a) + area(b) - i); };
+  const clampBox = (b, W, H) => box(Math.max(0, b.x0), Math.max(0, b.y0), Math.min(W, b.x1), Math.min(H, b.y1));
+  const fromArr = a => box(a[0], a[1], a[2], a[3]);
+
+  // Detections -> labelled subjects (person, hands, held objects, face, role)
+  function subjects(photo, p) {
+    const W = photo.w, H = photo.h;
+    let people = photo.persons.filter(d => d.score >= p.personScore).sort((a, b) => b.score - a.score);
+    people = people.filter((d, i) => !people.slice(0, i).some(k => iou(fromArr(k.box), fromArr(d.box)) > 0.6));
+    const objects = photo.objects.filter(o => HOLDABLE.has(o.cls) && o.score >= p.objectScore);
+    const subs = people.map(d => {
+      const person = fromArr(d.box), k = d.kpts || [];
+      const ok = i => k[i] && k[i][2] >= p.kpScore;
+      let face = null;
+      for (const i of [0, 1, 2, 3, 4]) if (ok(i)) face = union(face, box(k[i][0], k[i][1], k[i][0], k[i][1]));
+      if (face) { // pad the face points out to a head box
+        const s = Math.max(w(face), h(face), 0.04 * H) * 0.6;
+        face = clampBox(box(face.x0 - s, face.y0 - s * 1.6, face.x1 + s, face.y1 + s * 1.2), W, H);
+      }
+      const hands = [];
+      for (const [el, wr, sh] of [[7, 9, 5], [8, 10, 6]]) {
+        if (!ok(el) || !ok(wr)) continue;
+        const vx = k[wr][0] - k[el][0], vy = k[wr][1] - k[el][1], L = Math.hypot(vx, vy);
+        const cx = k[wr][0] + vx * 0.5, cy = k[wr][1] + vy * 0.5, r = L * p.handSize / 2;
+        let hb = box(cx - r, cy - r, cx + r, cy + r);
+        const raised = ok(sh) && k[wr][1] < k[sh][1];
+        if (raised) hb.y0 -= L * p.raisedReach;   // a raised hand may hold a prop on a stick above it
+        hands.push(clampBox(hb, W, H));
+      }
+      const held = objects.filter(o => hands.some(hb => overlaps(hb, fromArr(o.box)))).map(o => fromArr(o.box));
+      let extent = { ...person };
+      for (const b of [...hands, ...held]) extent = union(extent, b);
+      const edge = 3;
+      const touchesEdge = person.x0 <= edge || person.x1 >= W - edge || person.y0 <= edge;
+      return { score: d.score, person, face, hands, held, extent, touchesEdge, role: null };
+    });
+    const largest = Math.max(0, ...subs.map(s => area(s.person)));
+    for (const s of subs) {
+      if (s.touchesEdge && !s.face) s.role = "fragment";
+      else if (area(s.person) < p.secondaryArea * largest) s.role = "secondary";
+      else s.role = "primary";
+    }
+    // a small person overlapping a primary is part of the group, not background
+    for (const s of subs) if (s.role === "secondary" && subs.some(o => o.role === "primary" && overlaps(o.person, s.person))) s.role = "primary";
+    if (!p.includeSecondary) {} else for (const s of subs) if (s.role === "secondary") s.role = "primary";
+    if (subs.length && !subs.some(s => s.role === "primary")) subs.reduce((a, b) => area(a.person) > area(b.person) ? a : b).role = "primary";
+    return subs;
+  }
+
+  // Largest window-shaped rectangle in the photo: the 1x crop
+  function baseCrop(photo, windowAspect) {
+    const W = photo.w, H = photo.h;
+    return W / H > windowAspect ? { w: H * windowAspect, h: H } : { w: W, h: W / windowAspect };
+  }
+
+  function zoomLevels(base, p) {
+    const maxZoom = Math.min(p.maxZoom, base.w / 960);
+    if (p.zoomMode === "fixed") return [2, 1.4, 1].filter(z => z <= maxZoom + 1e-6);
+    const out = []; for (let z = maxZoom; z > 1; z -= 0.05) out.push(+z.toFixed(2)); out.push(1); return out;
+  }
+
+  // Place a crop of size cw x ch: content R inside the clear area, inside the photo,
+  // preferred position from the placement rule, then nudge so optional faces are whole or out.
+  function place(photo, R, cw, ch, clear, prefer, optionalFaces) {
+    const range = (r0, r1, c0, c1, size, limit) => { // allowed crop origin so [r0,r1] sits within [c0,c1] of the crop
+      const lo = Math.max(0, r1 - c1 * size), hi = Math.min(limit - size, r0 - c0 * size);
+      return [lo, hi];
+    };
+    const [xlo, xhi] = range(R.x0, R.x1, clear.x0, clear.x1, cw, photo.w);
+    const [ylo, yhi] = range(R.y0, R.y1, clear.y0, clear.y1, ch, photo.h);
+    if (xlo > xhi + 0.5 || ylo > yhi + 0.5) return null;
+    const pick = (pref, lo, hi, faces, a0, a1, size) => {
+      const c = v => Math.min(hi, Math.max(lo, v));
+      const cands = [c(pref)];
+      for (const f of faces) cands.push(c(f[a0]), c(f[a1] - size), c(f[a1]), c(f[a0] - size)); // include or exclude edges
+      const cuts = v => faces.filter(f => f[a0] < v && f[a1] > v || f[a0] < v + size && f[a1] > v + size).length;
+      return cands.sort((a, b) => cuts(a) - cuts(b) || Math.abs(a - pref) - Math.abs(b - pref))[0];
+    };
+    const x = pick(prefer.x, xlo, xhi, optionalFaces.map(f => ({ a: f.x0, b: f.x1 })), "a", "b", cw);
+    const y = pick(prefer.y, ylo, yhi, optionalFaces.map(f => ({ a: f.y0, b: f.y1 })), "a", "b", ch);
+    return box(x, y, x + cw, y + ch);
+  }
+
+  function crop(photo, subs, border, p, forcedZoom) {
+    const aspect = border.window.w / border.window.h;
+    const clear = { // clear area as fractions of the window
+      x0: (border.clear.x - border.window.x) / border.window.w, y0: (border.clear.y - border.window.y) / border.window.h,
+      x1: (border.clear.x + border.clear.w - border.window.x) / border.window.w, y1: (border.clear.y + border.clear.h - border.window.y) / border.window.h };
+    const base = baseCrop(photo, aspect);
+    const full = (flags) => { const b = box((photo.w - base.w) / 2, (photo.h - base.h) / 2, (photo.w + base.w) / 2, (photo.h + base.h) / 2);
+      return { crop: b, zoom: 1, R: null, flags }; };
+    const primaries = subs.filter(s => s.role === "primary");
+    if (!primaries.length) return full(["no people: full frame"]);
+    let C = null; for (const s of primaries) C = union(C, s.extent);
+    const m = p.margin * photo.h;
+    let R = box(C.x0 - m, C.y0 - m - p.headroom * photo.h, C.x1 + m, C.y1 + m);
+    R = clampBox(R, photo.w, photo.h);
+    const faces = primaries.map(s => s.face).filter(Boolean);
+    const optionalFaces = subs.filter(s => s.role !== "primary" && s.face).map(s => s.face);
+    const zooms = forcedZoom ? [forcedZoom] : zoomLevels(base, p);
+    for (const z of zooms) {
+      const cw = base.w / z, ch = base.h / z;
+      const cx = (R.x0 + R.x1) / 2, cy = (R.y0 + R.y1) / 2;
+      const midX = (clear.x0 + clear.x1) / 2;
+      let prefY;
+      if (p.vertical === "centre" || !faces.length) prefY = cy - (clear.y0 + clear.y1) / 2 * ch;
+      else { // eyes on the upper third line of the clear area
+        const eyeY = faces.reduce((a, f) => a + (f.y0 + f.y1) / 2, 0) / faces.length;
+        prefY = eyeY - (clear.y0 + (clear.y1 - clear.y0) / 3) * ch;
+      }
+      const c = place(photo, R, cw, ch, clear, { x: cx - midX * cw, y: prefY }, optionalFaces);
+      if (c) return { crop: c, zoom: z, R, flags: forcedZoom ? ["override"] : [] };
+    }
+    // nothing fits: 1x centred on the content, flagged
+    const cw = base.w, ch = base.h;
+    const x = Math.min(photo.w - cw, Math.max(0, (R.x0 + R.x1) / 2 - cw / 2)), y = Math.min(photo.h - ch, Math.max(0, (R.y0 + R.y1) / 2 - ch / 2));
+    return { crop: box(x, y, x + cw, y + ch), zoom: 1, R, flags: [forcedZoom ? "override doesn't fit" : "content doesn't fit the clear area: review"] };
+  }
+
+  return { subjects, crop, area };
+})();
+</script>
+
+<!-- ===================== Page (throwaway) ===================== -->
+<script>
+const THUMBS = "../../tmp/crop-rule-prototype/thumbs/";
+const BORDERS = {
+  wedding: { label: "Wedding (16:9 window, clear area = window)", src: "../../tmp/wedding-border-prototype/a-mat.png", size: [3840, 2400],
+             window: { x: 380, y: 334, w: 3080, h: 1732 }, clear: { x: 380, y: 334, w: 3080, h: 1732 } },
+  halloween: { label: "Halloween (16:10 window, small clear area)", src: "../../app/src/main/res/drawable-nodpi/border_overlay.png", size: [1920, 1200],
+             window: { x: 0, y: 0, w: 1920, h: 1200 }, clear: { x: 592, y: 327, w: 956, h: 538 } },
+  none: { label: "No border (16:9 window)", src: null, size: [1920, 1080],
+             window: { x: 0, y: 0, w: 1920, h: 1080 }, clear: { x: 0, y: 0, w: 1920, h: 1080 } },
+};
+const DEFAULTS = { personScore: 0.5, kpScore: 0.3, objectScore: 0.3, secondaryArea: 0.25, includeSecondary: false,
+  handSize: 1.0, raisedReach: 1.0, margin: 0.05, headroom: 0.0, zoomMode: "fixed", maxZoom: 2, vertical: "centre", border: "wedding" };
+let P = { ...DEFAULTS };
+const overrides = {}; // photo name -> forced zoom (previews the editable override file)
+
+const CONTROLS = [
+  ["h", "Crop"],
+  ["range", "margin", "Margin around the content", 0, 0.15, 0.01, v => Math.round(v * 100) + "% of photo height"],
+  ["range", "headroom", "Extra headroom above the top", 0, 0.15, 0.01, v => Math.round(v * 100) + "%"],
+  ["select", "zoomMode", "Zoom levels", [["fixed", "Fixed: 2×, 1.4×, 1×"], ["continuous", "Any zoom from 1× to the max"]]],
+  ["range", "maxZoom", "Maximum zoom", 1, 2, 0.1, v => v.toFixed(1) + "×"],
+  ["select", "vertical", "Vertical placement", [["centre", "Centre the content"], ["eyes", "Eyes on the upper third"]]],
+  ["select", "border", "Border", Object.entries(BORDERS).map(([k, b]) => [k, b.label])],
+  ["h", "What counts as interesting content"],
+  ["range", "handSize", "Hand area size", 0.5, 2.5, 0.1, v => v.toFixed(1) + " × forearm"],
+  ["range", "raisedReach", "Reach above a raised hand (props on sticks)", 0, 4, 0.1, v => v.toFixed(1) + " × forearm"],
+  ["range", "secondaryArea", "Background person if smaller than", 0, 0.6, 0.01, v => Math.round(v * 100) + "% of the largest"],
+  ["check", "includeSecondary", "Must keep background people too"],
+  ["h", "Detection thresholds"],
+  ["range", "personScore", "Person score", 0.25, 0.9, 0.01, v => v.toFixed(2)],
+  ["range", "kpScore", "Keypoint score", 0.1, 0.8, 0.01, v => v.toFixed(2)],
+  ["range", "objectScore", "Held object score", 0.25, 0.9, 0.01, v => v.toFixed(2)],
+];
+
+const SCENARIOS = [
+  { id: "all", name: "All photos", text: "Every test photo: the 57 booth photos and the 12 with real props. Start here and look for crops that feel wrong.", filter: () => true },
+  { id: "props", name: "Props on sticks", text: "Real wedding props held up on sticks. Detection can't see the props themselves, only the raised hand. Watch whether the crop clips the top of the sign. Try the <b>Reach above a raised hand</b> slider.", filter: p => p.set === "props" },
+  { id: "big", name: "Props held to the camera", text: "A giant prop fills the photo and the person is a sliver at the bottom. The rule only sees the person, so a zoomed crop may centre on a forehead and cut the prop. Should these be 1×?",
+    filter: p => ["IMG_20261010_211324_001.jpg", "IMG_20261010_211518_001.jpg", "IMG_20261010_211622_001.jpg"].includes(p.name) },
+  { id: "background", name: "Background people", text: "A child on the sofa or a small figure behind the main people. They're optional: the crop shouldn't be forced to keep them, nor cut through their faces. Try <b>Must keep background people too</b>.",
+    filter: p => ["2026-09-12-11-48-51.png", "2026-09-12-11-49-34.png", "2026-09-12-11-49-55.png", "2026-09-12-11-50-13.png", "2026-09-13-06-40-20.png"].includes(p.name) },
+  { id: "edge", name: "Cut off at the edge", text: "Torsos, arms or a foot at the photo edge with no face visible. They're fragments, so they're optional, unless they're the only person.",
+    filter: p => ["2026-09-12-11-55-38.png", "2026-09-12-11-55-55.png", "2026-09-12-11-56-16.png", "2026-09-13-07-00-49.png", "2026-09-13-07-01-09.png", "2026-09-12-12-02-26.png", "IMG_20260913_091233_001.jpg"].includes(p.name) },
+  { id: "odd", name: "Odd cases", text: "A selfie with an outstretched arm, a face shot from below, an upside-down couple and a headless torso.",
+    filter: p => ["2026-09-12-12-00-11.png", "2026-09-12-22-07-54.png", "2026-09-12-12-00-39.png", "2026-09-12-11-48-51.png"].includes(p.name) },
+  { id: "halloween", name: "Halloween clear area", text: "The Halloween border's artwork covers everything but a middle 956×538 area, so the content must fit there. A 1× crop is 16:10, trimming about 10% of the photo's width. Expect far fewer zoomed crops.",
+    filter: () => true, set: { border: "halloween" } },
+  { id: "flagged", name: "Flagged for review", text: "Photos where the rule couldn't fit the content, or found no people. These would be marked on the contact sheet.", filter: (p, r) => r.flags.length > 0 },
+];
+let scenario = SCENARIOS[0];
+
+const images = {};
+function img(src) { if (!images[src]) { const i = new Image(); i.src = src; i.onload = () => schedule(); images[src] = i; } return images[src]; }
+
+function buildControls() {
+  const el = document.getElementById("controls"); el.innerHTML = "";
+  for (const c of CONTROLS) {
+    if (c[0] === "h") { el.insertAdjacentHTML("beforeend", `<h3>${c[1]}</h3>`); continue; }
+    const [type, key, label] = c;
+    const l = document.createElement("label");
+    if (type === "range") {
+      l.innerHTML = `${label} <span class="v">${c[6](P[key])}</span><input type="range" min="${c[3]}" max="${c[4]}" step="${c[5]}" value="${P[key]}">`;
+      l.querySelector("input").oninput = e => { P[key] = +e.target.value; l.querySelector(".v").textContent = c[6](P[key]); schedule(); };
+    } else if (type === "select") {
+      l.innerHTML = `${label}<br><select>${c[3].map(([v, t]) => `<option value="${v}" ${P[key] === v ? "selected" : ""}>${t}</option>`).join("")}</select>`;
+      l.querySelector("select").onchange = e => { P[key] = e.target.value; schedule(); };
+    } else {
+      l.innerHTML = `<input type="checkbox" ${P[key] ? "checked" : ""}> ${label}`;
+      l.querySelector("input").onchange = e => { P[key] = e.target.checked; schedule(); };
+    }
+    el.appendChild(l);
+  }
+  const reset = document.createElement("button"); reset.textContent = "Reset to the starting rule";
+  reset.style.marginTop = "14px"; reset.onclick = () => { P = { ...DEFAULTS }; for (const k in overrides) delete overrides[k]; buildControls(); render(); };
+  el.appendChild(reset);
+  const dump = document.createElement("pre"); dump.id = "dump"; dump.style.cssText = "font-size:11px;white-space:pre-wrap;color:#555;margin-top:14px";
+  el.appendChild(dump);
+}
+
+function buildTabs() {
+  const el = document.getElementById("tabs"); el.innerHTML = "";
+  for (const s of SCENARIOS) {
+    const b = document.createElement("button"); b.textContent = s.name; b.className = s === scenario ? "on" : "";
+    b.onclick = () => { scenario = s; if (s.set) Object.assign(P, s.set); else if (P.border === "halloween" && scenario.id !== "halloween") P.border = DEFAULTS.border;
+      buildTabs(); buildControls(); render(); };
+    el.appendChild(b);
+  }
+  document.getElementById("scenario").innerHTML = scenario.text;
+}
+
+let pending = false;
+function schedule() { if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+function drawBox(ctx, b, s, color, width = 2, dash = []) {
+  if (!b) return; ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+  ctx.strokeRect(b.x0 * s, b.y0 * s, (b.x1 - b.x0) * s, (b.y1 - b.y0) * s); ctx.restore();
+}
+
+function render() {
+  const border = BORDERS[P.border];
+  const grid = document.getElementById("grid"); grid.innerHTML = "";
+  const counts = { 2: 0, 1.4: 0, 1: 0, other: 0, flagged: 0 }; let shown = 0;
+  for (const photo of PHOTOS) {
+    const subs = CropRule.subjects(photo, P);
+    const res = CropRule.crop(photo, subs, border, P, overrides[photo.name]);
+    if (!scenario.filter(photo, res)) continue;
+    shown++;
+    if (res.flags.length) counts.flagged++;
+    if (counts[res.zoom] !== undefined) counts[res.zoom]++; else counts.other++;
+    const card = document.createElement("div"); card.className = "card" + (res.flags.length && !res.flags.includes("override") ? " flag" : "");
+    const pair = document.createElement("div"); pair.className = "pair";
+    const W = 480, s = W / photo.w;
+    const a = document.createElement("canvas"); a.width = W; a.height = Math.round(photo.h * s);
+    const ctx = a.getContext("2d"); const th = img(THUMBS + photo.thumb);
+    if (th.complete && th.naturalWidth) ctx.drawImage(th, 0, 0, a.width, a.height);
+    for (const sub of subs) {
+      const prim = sub.role === "primary";
+      drawBox(ctx, sub.person, s, prim ? "#2e86de" : "#aaa", prim ? 2 : 1.5, prim ? [] : [4, 3]);
+      for (const hb of sub.hands) drawBox(ctx, hb, s, "#f39c12", 1.5);
+      for (const ob of sub.held) drawBox(ctx, ob, s, "#8e44ad", 2);
+      drawBox(ctx, sub.face, s, "#e84393", 1.5);
+    }
+    drawBox(ctx, res.R, s, "#27ae60", 2, [6, 4]);
+    drawBox(ctx, res.crop, s, "#e74c3c", 3);
+    const cw = res.crop.x1 - res.crop.x0, ch = res.crop.y1 - res.crop.y0;
+    if (border.clear.w !== border.window.w || border.clear.h !== border.window.h) {
+      const fx = cw / border.window.w, fy = ch / border.window.h;
+      drawBox(ctx, { x0: res.crop.x0 + (border.clear.x - border.window.x) * fx, y0: res.crop.y0 + (border.clear.y - border.window.y) * fy,
+        x1: res.crop.x0 + (border.clear.x - border.window.x + border.clear.w) * fx, y1: res.crop.y0 + (border.clear.y - border.window.y + border.clear.h) * fy }, s, "#e74c3c", 1.5, [5, 4]);
+    }
+    // framed photo: crop into the window, border artwork on top
+    const b = document.createElement("canvas"); b.width = W; b.height = Math.round(W * border.size[1] / border.size[0]);
+    const bx = b.getContext("2d"), bs = W / border.size[0];
+    bx.fillStyle = "#f1e4cc"; bx.fillRect(0, 0, b.width, b.height);
+    if (th.complete && th.naturalWidth) {
+      const ts = th.naturalWidth / photo.w;
+      bx.drawImage(th, res.crop.x0 * ts, res.crop.y0 * ts, cw * ts, ch * ts,
+        border.window.x * bs, border.window.y * bs, border.window.w * bs, border.window.h * bs);
+    }
+    if (border.src) { const bi = img(border.src); if (bi.complete && bi.naturalWidth) bx.drawImage(bi, 0, 0, b.width, b.height); }
+    pair.append(a, b); card.appendChild(pair);
+    const cap = document.createElement("div"); cap.className = "cap";
+    const roles = subs.reduce((o, x) => (o[x.role] = (o[x.role] || 0) + 1, o), {});
+    cap.innerHTML = `<span class="name">${photo.set}/${photo.name} · ${Object.entries(roles).map(([k, v]) => v + " " + k).join(", ") || "nobody"}</span>
+      <span><b>${(+res.zoom).toFixed(res.zoom % 1 ? 2 : 0)}×</b> · ${Math.round(cw)}px wide <span class="flags">${res.flags.join("; ")}</span>
+      <select title="Override (previews the crop override file)">${[["", "auto"], [1, "force 1×"], [1.4, "force 1.4×"], [2, "force 2×"]].map(([v, t]) =>
+        `<option value="${v}" ${String(overrides[photo.name] || "") === String(v) ? "selected" : ""}>${t}</option>`).join("")}</select></span>`;
+    cap.querySelector("select").onchange = e => { if (e.target.value) overrides[photo.name] = +e.target.value; else delete overrides[photo.name]; render(); };
+    card.appendChild(cap); grid.appendChild(card);
+  }
+  document.getElementById("summary").innerHTML = `<span>Showing <b>${shown}</b></span><span>2×: <b>${counts[2]}</b></span><span>1.4×: <b>${counts[1.4]}</b></span>
+    <span>1×: <b>${counts[1]}</b></span>${P.zoomMode === "continuous" ? `<span>in between: <b>${counts.other}</b></span>` : ""}<span>flagged: <b>${counts.flagged}</b></span>`;
+  document.getElementById("dump").textContent = "Current settings\n" + Object.entries(P).map(([k, v]) => `${k}: ${v}`).join("\n")
+    + (Object.keys(overrides).length ? "\n\nOverrides\n" + Object.entries(overrides).map(([k, v]) => `${k}: ${v}×`).join("\n") : "");
+}
+
+{ const t = SCENARIOS.find(s => "#" + s.id === location.hash); if (t) { scenario = t; if (t.set) Object.assign(P, t.set); } }
+buildControls(); buildTabs(); render();
+</script>
+</body>
+</html>
