@@ -1,0 +1,26 @@
+diff --git a/drivers/usb/otg/msm_otg.c b/drivers/usb/otg/msm_otg.c
+index afb88b6..4162805 100755
+--- a/drivers/usb/otg/msm_otg.c
++++ b/drivers/usb/otg/msm_otg.c
+@@ -99,7 +99,7 @@ static int global_vbus_suspend_status;
+ static int global_id_pin_suspend_status;
+ 
+ //otg+charge: sysfs entry
+-static bool usbhost_charge_mode = false;
++static bool usbhost_charge_mode = true;
+ module_param(usbhost_charge_mode, bool, 0755); 
+ 
+ /* APQ8064 GPIO pin definition */
+@@ -2275,7 +2275,11 @@ static void msm_chg_detect_work(struct work_struct *w)
+ 				break;
+ 			}
+ 
+-			if (line_state) { /* DP > VLGC or/and DM > VLGC */
++			/* otg+charge: data lines belong to the peripheral; SDP would cap input at 500mA */
++			if (usbhost_charge_mode && !test_bit(ID, &motg->inputs)) {
++				pr_info("[usbhost_charge_mode]: host mode, forcing ACA for full input current\n");
++				motg->chg_type = USB_ACA_A_CHARGER;
++			} else if (line_state) { /* DP > VLGC or/and DM > VLGC */
+ 				//otg+charge				
+ 				if (usbhost_charge_mode) {
+ 					motg->chg_type = USB_ACA_A_CHARGER;
