@@ -17,8 +17,12 @@ Decorative artwork, themed for the event (wedding, Halloween), that surrounds a 
 _Avoid_: Frame, surround, overlay
 
 **Window**:
-The clear region of a border where the photo shows through.
+The region of a border where the photo is shown.
 _Avoid_: Hole, cut-out, inner frame
+
+**Clear area**:
+The part of a window that no border artwork covers; interesting content is placed there. Unless a border says otherwise, it is the whole window.
+_Avoid_: Safe area, safe zone, keep-out
 
 **Crop**:
 The region of a photo, the same shape as the window, that is kept because it holds the interesting content.
