@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE, throwaway: viewer template for prototype_wedding_border.py (wayfinder ticket #8). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: wedding border</title>
+<style>
+  body { margin: 0; background: #1c1c1c; color: #eee; font: 14px system-ui, sans-serif; }
+  #wrap { padding: 16px 16px 150px; }
+  #stage { position: relative; width: min(100%, calc((100vh - 190px) * 1.6)); margin: 0 auto;
+           aspect-ratio: 3840 / 2400; overflow: hidden; box-shadow: 0 6px 30px #000a; }
+  #stage.zoom { width: 3840px; aspect-ratio: auto; height: 2400px; }
+  #photo { position: absolute; object-fit: cover; }
+  #border { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #zoombox { overflow: auto; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; background: #111e; padding: 10px 16px;
+         display: flex; flex-wrap: wrap; gap: 6px 22px; border-top: 1px solid #333; }
+  .group b { display: block; font-size: 11px; text-transform: uppercase; color: #999; margin-bottom: 4px; }
+  button { background: #2a2a2a; color: #ddd; border: 1px solid #444; border-radius: 6px; padding: 5px 10px;
+           cursor: pointer; }
+  button.on { background: #b8742a; border-color: #e0a050; color: #fff; }
+  #state { width: 100%; font: 12px ui-monospace, monospace; color: #bbb; }
+  .warn { color: #ffb74d; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="zoombox"><div id="stage"><img id="photo"><img id="border"></div></div></div>
+<div id="bar">
+  <div class="group"><b>Variant (V)</b><span id="g-variant"></span></div>
+  <div class="group"><b>Gap colour (G)</b><span id="g-gap"></span></div>
+  <div class="group"><b>Photo (P)</b><span id="g-photo"></span></div>
+  <div class="group"><b>View (Z)</b><span id="g-view"></span></div>
+  <div id="state"></div>
+</div>
+<script>
+/*DATA*/
+const NOTES = {
+  "a-mask": "(a) original art upscaled, leaves cut at the window edge, label moved",
+  "a-mat": "(a) as a-mask, plus ivory mat + gold keyline over the cut",
+  "b-redraw": "(b) redrawn from scratch, no leaf touches the window",
+};
+const q = new URLSearchParams(location.search);
+const st = { variant: q.get("variant") || DATA.variants[0], gap: q.get("gap") || "ivory",
+             photo: +(q.get("photo") || 0), view: q.get("view") || "fit" };
+const groups = { variant: DATA.variants, gap: Object.keys(DATA.gaps),
+                 photo: DATA.photos.map((_, i) => i), view: ["fit", "100%"] };
+function render() {
+  for (const [k, opts] of Object.entries(groups)) {
+    const el = document.getElementById("g-" + k); el.innerHTML = "";
+    for (const o of opts) {
+      const b = document.createElement("button");
+      b.textContent = k === "photo" ? DATA.photos[o].split("/").pop().slice(5, 19) : o;
+      if (st[k] === o) b.className = "on";
+      b.onclick = () => { st[k] = o; render(); }; el.appendChild(b);
+    }
+  }
+  const [W, H] = DATA.canvas, w = DATA.window, stage = document.getElementById("stage");
+  stage.className = st.view === "100%" ? "zoom" : "";
+  stage.style.background = DATA.gaps[st.gap];
+  const p = document.getElementById("photo");
+  p.src = DATA.photos[st.photo];
+  Object.assign(p.style, { left: w.x / W * 100 + "%", top: w.y / H * 100 + "%",
+                           width: w.w / W * 100 + "%", height: w.h / H * 100 + "%" });
+  document.getElementById("border").src = st.variant + ".png";
+  history.replaceState(null, "", "?" + new URLSearchParams(st));
+  document.getElementById("state").innerHTML =
+    `variant=${st.variant} — ${NOTES[st.variant]} | gap=${DATA.gaps[st.gap]} | photo=${DATA.photos[st.photo].split("/").pop()}` +
+    ` | canvas=${W}x${H} | window x=${w.x} y=${w.y} w=${w.w} h=${w.h} (16:9) r=${w.radius}` +
+    (DATA.standin && st.variant.startsWith("a") ? ` <span class="warn">| (a) uses a Lanczos STAND-IN, not the AI upscale</span>` : "");
+}
+document.addEventListener("keydown", e => {
+  const k = { v: "variant", g: "gap", p: "photo", z: "view" }[e.key.toLowerCase()];
+  if (!k) return;
+  const o = groups[k]; st[k] = o[(o.indexOf(st[k]) + (e.shiftKey ? o.length - 1 : 1)) % o.length]; render();
+});
+render();
+</script>
+</body>
+</html>
