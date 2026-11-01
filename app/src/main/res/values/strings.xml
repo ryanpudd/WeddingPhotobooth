@@ -30,7 +30,7 @@
     <string name="label_webhook_url">Discord Webhook URL</string>
     <string name="hint_webhook_unchanged">(unchanged)</string>
     <string name="admin_webhook_invalid">Not a valid Discord webhook URL</string>
-    <string name="admin_secret_length_invalid">AWS secret key must be 40 characters (got %1$d). Nothing saved.</string>
+    <string name="admin_secret_length_invalid">AWS secret key must be 40 characters (got %1$d). S3 credentials not saved.</string>
     <string name="btn_send_test_alert">Send test alert</string>
     <string name="btn_send_diagnostics">Send diagnostics</string>
     <string name="toast_test_alert_sent">Test alert queued</string>

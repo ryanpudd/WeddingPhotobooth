@@ -1054,7 +1054,8 @@ class MainActivity : AppCompatActivity(), CameraDialog.CameraDialogParent  {
             uploadPending = UploadQueueManager.countJpgs(UploadQueueManager.pendingDir(this)),
             uploadRetrying = UploadQueueManager.countJpgs(UploadQueueManager.retryDir(this)),
             uploadFailed = UploadQueueManager.countJpgs(UploadQueueManager.failedDir(this)),
-            lastUploadError = UploadWorker.lastError
+            lastUploadError = UploadWorker.lastError,
+            invertedMount = InvertedMountStore.isEnabled(this)
         )
     }
 

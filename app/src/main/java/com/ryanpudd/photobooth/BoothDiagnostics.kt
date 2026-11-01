@@ -22,7 +22,8 @@ data class DiagnosticsSnapshot(
     val uploadPending: Int = 0,
     val uploadRetrying: Int = 0,
     val uploadFailed: Int = 0,
-    val lastUploadError: String? = null
+    val lastUploadError: String? = null,
+    val invertedMount: Boolean = false
 )
 
 object BoothDiagnostics {
@@ -46,6 +47,7 @@ object BoothDiagnostics {
             append("usb         : attached=${snapshot.usbDeviceAttached} permission=${snapshot.usbPermissionGranted}\n")
             append("device      : $device\n")
             append("ids         : vendor=$vid product=$pid\n")
+            append("mount       : ${if (snapshot.invertedMount) "inverted" else "normal"}\n")
             append("battery     : ${snapshot.batteryLevelPercent}% plugged=${snapshot.batteryPluggedRaw}\n")
             append("uptime      : ${formatUptime(snapshot.appUptimeMs)}\n")
             append("uploads     : pending=${snapshot.uploadPending} retrying=${snapshot.uploadRetrying} failed=${snapshot.uploadFailed}\n")
