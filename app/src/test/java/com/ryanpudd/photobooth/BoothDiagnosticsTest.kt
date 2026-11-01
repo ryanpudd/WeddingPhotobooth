@@ -47,6 +47,14 @@ class BoothDiagnosticsTest {
     }
 
     @Test
+    fun format_reportsWhetherTheBoothIsOnAnInvertedMount() {
+        val normal = BoothDiagnostics.format(snapshot())
+        val inverted = BoothDiagnostics.format(snapshot().copy(invertedMount = true))
+        assertTrue("missing normal mount in:\n$normal", normal.contains("mount       : normal"))
+        assertTrue("missing inverted mount in:\n$inverted", inverted.contains("mount       : inverted"))
+    }
+
+    @Test
     fun format_wrapsInACodeBlockSoDiscordKeepsTheLayout() {
         val report = BoothDiagnostics.format(snapshot())
         assertTrue(report.contains("```"))
