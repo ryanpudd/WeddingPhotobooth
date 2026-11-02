@@ -25,7 +25,7 @@ The part of a window that no border artwork covers; interesting content is place
 _Avoid_: Safe area, safe zone, keep-out
 
 **Crop**:
-The region of a photo, the same shape as the window, that is kept because it holds the interesting content.
+The region of a photo, the same shape as the window (or, in a collage, as its cell), that is kept because it holds the interesting content.
 _Avoid_: Cut, selection
 
 **Interesting content**:
@@ -35,3 +35,11 @@ _Avoid_: Subject, focus
 **Framed photo**:
 A new image made of a photo's crop shown in a border's window; the original photo is never changed.
 _Avoid_: Bordered photo, composite
+
+**Collage**:
+A new image made of several photos' crops, laid out in a grid of equal cells inside one border's clear area.
+_Avoid_: Montage, mosaic, contact sheet
+
+**Cell**:
+One position in a collage's grid, holding one photo's crop. Every cell in a collage has the same size.
+_Avoid_: Tile, slot, pane
