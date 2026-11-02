@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: collage layout</title>
+<style>
+  :root { --accent: #8a5a12; --ink: #222; --muted: #777; --line: #e3ddd2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--ink); background: #faf8f4; }
+  header { padding: 18px 24px 8px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .banner { display: inline-block; background: #fbe9c6; color: #6b4a10; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .intro { max-width: 1100px; color: #444; }
+  .layout { display: grid; grid-template-columns: 320px 1fr; }
+  aside { position: sticky; top: 0; height: 100vh; overflow: auto; padding: 12px 18px 40px 24px; border-right: 1px solid var(--line); background: #fff; }
+  aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; }
+  label { display: block; margin: 6px 0; }
+  label .v { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range], select { width: 100%; }
+  .hint { color: var(--muted); font-size: 12px; margin: -2px 0 6px; }
+  main { padding: 10px 20px 60px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+  .tabs button { border: 1px solid var(--line); background: #fff; padding: 5px 10px; border-radius: 16px; cursor: pointer; font: inherit; }
+  .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .scenario { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; max-width: 1400px; }
+  #out { width: 100%; max-width: 1400px; height: auto; display: block; background: #ddd; border-radius: 4px; }
+  .state { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 1400px; margin-top: 10px; }
+  .box { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  td, th { padding: 2px 6px; text-align: right; border-bottom: 1px solid #f0ebe2; }
+  th { color: var(--muted); font-weight: 500; }
+  tr.pick { background: #fbe9c6; font-weight: 600; }
+  tr.bad td { color: #b55; }
+  tr { cursor: pointer; }
+  .flags { color: #c0392b; }
+  button.act { font: inherit; padding: 5px 10px; margin: 4px 4px 0 0; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <span class="banner">PROTOTYPE · throwaway · branch prototype/collage-layout</span>
+  <h1>How should collage lay out N photos in the window?</h1>
+  <p class="intro">A real collage made from the test photos with the crop rule from <i>prototype/crop-rule</i> (same detections, same
+  placement). Every tile is cropped at one shared zoom to the tile's own aspect. Move the controls, or click a row in the grid table
+  to force that grid (<code>--grid CxR</code>). The questions are how the automatic grid is chosen, the gap width, how far tiles may stray
+  from the photo's 16:9, and whether the ~3840px cap holds up. "Render full size" opens the composite at its true output size.</p>
+</header>
+<div class="layout">
+<aside id="controls"></aside>
+<main>
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario" id="scenario"></div>
+  <canvas id="out"></canvas>
+  <div class="state">
+    <div class="box"><b>Grids for this N and window</b> <span class="hint">(click to force; ✓ = auto pick)</span><table id="grids"></table></div>
+    <div class="box"><b>State</b><div id="state"></div></div>
+  </div>
+</main>
+</div>
+
+<script src="data.js"></script>
+<script>
+const CropRule = (() => {
+  const HOLDABLE = new Set(["umbrella","frisbee","sports ball","kite","baseball bat","tennis racket","bottle","wine glass",
+    "cup","fork","knife","spoon","banana","apple","cell phone","book","clock","scissors","teddy bear","toothbrush","remote","tie"]);
+  const box = (x0, y0, x1, y1) => ({ x0, y0, x1, y1 });
+  const w = b => b.x1 - b.x0, h = b => b.y1 - b.y0, area = b => Math.max(0, w(b)) * Math.max(0, h(b));
+  const union = (a, b) => a ? box(Math.min(a.x0, b.x0), Math.min(a.y0, b.y0), Math.max(a.x1, b.x1), Math.max(a.y1, b.y1)) : { ...b };
+  const inter = (a, b) => box(Math.max(a.x0, b.x0), Math.max(a.y0, b.y0), Math.min(a.x1, b.x1), Math.min(a.y1, b.y1));
+  const overlaps = (a, b) => w(inter(a, b)) > 0 && h(inter(a, b)) > 0;
+  const iou = (a, b) => { const i = area(inter(a, b)); return i / (area(a) + area(b) - i); };
+  const clampBox = (b, W, H) => box(Math.max(0, b.x0), Math.max(0, b.y0), Math.min(W, b.x1), Math.min(H, b.y1));
+  const fromArr = a => box(a[0], a[1], a[2], a[3]);
+
+  // Detections -> labelled subjects (person, hands, held objects, face, role)
+  function subjects(photo, p) {
+    const W = photo.w, H = photo.h;
+    let people = photo.persons.filter(d => d.score >= p.personScore).sort((a, b) => b.score - a.score);
+    people = people.filter((d, i) => !people.slice(0, i).some(k => iou(fromArr(k.box), fromArr(d.box)) > 0.6));
+    const objects = photo.objects.filter(o => HOLDABLE.has(o.cls) && o.score >= p.objectScore);
+    const subs = people.map(d => {
+      const person = fromArr(d.box), k = d.kpts || [];
+      const ok = i => k[i] && k[i][2] >= p.kpScore;
+      let face = null;
+      for (const i of [0, 1, 2, 3, 4]) if (ok(i)) face = union(face, box(k[i][0], k[i][1], k[i][0], k[i][1]));
+      if (face) { // pad the face points out to a head box
+        const s = Math.max(w(face), h(face), 0.04 * H) * 0.6;
+        face = clampBox(box(face.x0 - s, face.y0 - s * 1.6, face.x1 + s, face.y1 + s * 1.2), W, H);
+      }
+      const hands = [];
+      for (const [el, wr, sh] of [[7, 9, 5], [8, 10, 6]]) {
+        if (!ok(el) || !ok(wr)) continue;
+        const vx = k[wr][0] - k[el][0], vy = k[wr][1] - k[el][1], L = Math.hypot(vx, vy);
+        const cx = k[wr][0] + vx * 0.5, cy = k[wr][1] + vy * 0.5, r = L * p.handSize / 2;
+        let hb = box(cx - r, cy - r, cx + r, cy + r);
+        const raised = ok(sh) && k[wr][1] < k[sh][1];
+        if (raised) hb.y0 -= L * p.raisedReach;   // a raised hand may hold a prop on a stick above it
+        hands.push(clampBox(hb, W, H));
+      }
+      const held = objects.filter(o => hands.some(hb => overlaps(hb, fromArr(o.box)))).map(o => fromArr(o.box));
+      let extent = { ...person };
+      for (const b of [...hands, ...held]) extent = union(extent, b);
+      const edge = 3;
+      const touchesEdge = person.x0 <= edge || person.x1 >= W - edge || person.y0 <= edge;
+      return { score: d.score, person, face, hands, held, extent, touchesEdge, role: null };
+    });
+    const largest = Math.max(0, ...subs.map(s => area(s.person)));
+    for (const s of subs) {
+      if (s.touchesEdge && !s.face) s.role = "fragment";
+      else if (area(s.person) < p.secondaryArea * largest) s.role = "secondary";
+      else s.role = "primary";
+    }
+    // a small person overlapping a primary is part of the group, not background
+    for (const s of subs) if (s.role === "secondary" && subs.some(o => o.role === "primary" && overlaps(o.person, s.person))) s.role = "primary";
+    if (!p.includeSecondary) {} else for (const s of subs) if (s.role === "secondary") s.role = "primary";
+    if (subs.length && !subs.some(s => s.role === "primary")) subs.reduce((a, b) => area(a.person) > area(b.person) ? a : b).role = "primary";
+    return subs;
+  }
+
+  // Largest window-shaped rectangle in the photo: the 1x crop
+  function baseCrop(photo, windowAspect) {
+    const W = photo.w, H = photo.h;
+    return W / H > windowAspect ? { w: H * windowAspect, h: H } : { w: W, h: W / windowAspect };
+  }
+
+  function zoomLevels(base, p) {
+    const maxZoom = Math.min(p.maxZoom, base.w / 960);
+    if (p.zoomMode === "fixed") return [2, 1.4, 1].filter(z => z <= maxZoom + 1e-6);
+    const out = []; for (let z = maxZoom; z > 1; z -= 0.05) out.push(+z.toFixed(2)); out.push(1); return out;
+  }
+
+  // Place a crop of size cw x ch: content R inside the clear area, inside the photo,
+  // preferred position from the placement rule, then nudge so optional faces are whole or out.
+  function place(photo, R, cw, ch, clear, prefer, optionalFaces) {
+    const range = (r0, r1, c0, c1, size, limit) => { // allowed crop origin so [r0,r1] sits within [c0,c1] of the crop
+      const lo = Math.max(0, r1 - c1 * size), hi = Math.min(limit - size, r0 - c0 * size);
+      return [lo, hi];
+    };
+    const [xlo, xhi] = range(R.x0, R.x1, clear.x0, clear.x1, cw, photo.w);
+    const [ylo, yhi] = range(R.y0, R.y1, clear.y0, clear.y1, ch, photo.h);
+    if (xlo > xhi + 0.5 || ylo > yhi + 0.5) return null;
+    const pick = (pref, lo, hi, faces, a0, a1, size) => {
+      const c = v => Math.min(hi, Math.max(lo, v));
+      const cands = [c(pref)];
+      for (const f of faces) cands.push(c(f[a0]), c(f[a1] - size), c(f[a1]), c(f[a0] - size)); // include or exclude edges
+      const cuts = v => faces.filter(f => f[a0] < v && f[a1] > v || f[a0] < v + size && f[a1] > v + size).length;
+      return cands.sort((a, b) => cuts(a) - cuts(b) || Math.abs(a - pref) - Math.abs(b - pref))[0];
+    };
+    const x = pick(prefer.x, xlo, xhi, optionalFaces.map(f => ({ a: f.x0, b: f.x1 })), "a", "b", cw);
+    const y = pick(prefer.y, ylo, yhi, optionalFaces.map(f => ({ a: f.y0, b: f.y1 })), "a", "b", ch);
+    return box(x, y, x + cw, y + ch);
+  }
+
+  function crop(photo, subs, border, p, forcedZoom) {
+    const aspect = border.window.w / border.window.h;
+    const clear = { // clear area as fractions of the window
+      x0: (border.clear.x - border.window.x) / border.window.w, y0: (border.clear.y - border.window.y) / border.window.h,
+      x1: (border.clear.x + border.clear.w - border.window.x) / border.window.w, y1: (border.clear.y + border.clear.h - border.window.y) / border.window.h };
+    const base = baseCrop(photo, aspect);
+    const full = (flags) => { const b = box((photo.w - base.w) / 2, (photo.h - base.h) / 2, (photo.w + base.w) / 2, (photo.h + base.h) / 2);
+      return { crop: b, zoom: 1, R: null, flags }; };
+    const primaries = subs.filter(s => s.role === "primary");
+    if (!primaries.length) return full(["no people: full frame"]);
+    let C = null; for (const s of primaries) C = union(C, s.extent);
+    const m = p.margin * photo.h;
+    let R = box(C.x0 - m, C.y0 - m - p.headroom * photo.h, C.x1 + m, C.y1 + m);
+    R = clampBox(R, photo.w, photo.h);
+    const faces = primaries.map(s => s.face).filter(Boolean);
+    const optionalFaces = subs.filter(s => s.role !== "primary" && s.face).map(s => s.face);
+    const zooms = forcedZoom ? [forcedZoom] : zoomLevels(base, p);
+    for (const z of zooms) {
+      const cw = base.w / z, ch = base.h / z;
+      const cx = (R.x0 + R.x1) / 2, cy = (R.y0 + R.y1) / 2;
+      const midX = (clear.x0 + clear.x1) / 2;
+      let prefY;
+      if (p.vertical === "centre" || !faces.length) prefY = cy - (clear.y0 + clear.y1) / 2 * ch;
+      else { // eyes on the upper third line of the clear area
+        const eyeY = faces.reduce((a, f) => a + (f.y0 + f.y1) / 2, 0) / faces.length;
+        prefY = eyeY - (clear.y0 + (clear.y1 - clear.y0) / 3) * ch;
+      }
+      const c = place(photo, R, cw, ch, clear, { x: cx - midX * cw, y: prefY }, optionalFaces);
+      if (c) return { crop: c, zoom: z, R, flags: forcedZoom ? ["override"] : [] };
+    }
+    // nothing fits: 1x centred on the content, flagged
+    const cw = base.w, ch = base.h;
+    const x = Math.min(photo.w - cw, Math.max(0, (R.x0 + R.x1) / 2 - cw / 2)), y = Math.min(photo.h - ch, Math.max(0, (R.y0 + R.y1) / 2 - ch / 2));
+    return { crop: box(x, y, x + cw, y + ch), zoom: 1, R, flags: [forcedZoom ? "override doesn't fit" : "content doesn't fit the clear area: review"] };
+  }
+
+  return { subjects, crop, area };
+})();
+</script>
+
+<!-- ===================== Collage layout: pure functions ===================== -->
+<script>
+const Collage = (() => {
+  const PHOTO_ASPECT = 16 / 9;
+  // every grid with C columns that holds N photos without an empty row
+  function candidates(n, area, gap, outer) {
+    const out = [];
+    for (let c = 1; c <= n; c++) {
+      const r = Math.ceil(n / c);
+      if ((r - 1) * c >= n) continue;
+      const iw = area.w - 2 * outer, ih = area.h - 2 * outer;
+      const tw = (iw - (c - 1) * gap) / c, th = (ih - (r - 1) * gap) / r;
+      if (tw <= 0 || th <= 0) continue;
+      const aspect = tw / th;
+      out.push({ c, r, tw, th, aspect, dev: Math.abs(Math.log(aspect / PHOTO_ASPECT)), empty: c * r - n });
+    }
+    return out;
+  }
+  // how the automatic grid is chosen
+  const STRATEGIES = {
+    aspect: { label: "Tiles closest to 16:9", score: g => g.dev },
+    aspectEmpty: { label: "Closest to 16:9, penalise empty slots", score: (g, n) => g.dev + 0.5 * g.empty / n },
+    fewestEmpty: { label: "Fewest empty slots, then closest to 16:9", score: (g, n) => g.empty * 10 + g.dev },
+    square: { label: "Most square count (C close to R)", score: g => Math.abs(g.c - g.r) + g.dev * 0.01 },
+  };
+  function pick(cands, n, strategy, maxDev) {
+    const ok = cands.filter(g => g.dev <= maxDev);
+    const pool = ok.length ? ok : cands;
+    return pool.slice().sort((a, b) => STRATEGIES[strategy].score(a, n) - STRATEGIES[strategy].score(b, n))[0];
+  }
+  // tile rectangles; a partly filled last row is centred
+  function tiles(n, area, g, gap, outer) {
+    const rects = [];
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / g.c), col = i % g.c;
+      const inRow = row === g.r - 1 ? n - row * g.c : g.c;
+      const shift = (g.c - inRow) * (g.tw + gap) / 2;
+      rects.push({ x: area.x + outer + shift + col * (g.tw + gap), y: area.y + outer + row * (g.th + gap), w: g.tw, h: g.th });
+    }
+    return rects;
+  }
+  return { candidates, pick, tiles, STRATEGIES };
+})();
+</script>
+
+<!-- ===================== Page (throwaway) ===================== -->
+<script>
+const SRC = { booth: "../../tmp/WeddingPhotobooth/", props: "../../tmp/WeddingPhotosWithProps/" };
+const BORDERS = {
+  wedding: { label: "Wedding (window 3080×1732, clear area = window)", src: "../../tmp/wedding-border-prototype/a-mat.png", size: [3840, 2400],
+             window: { x: 380, y: 334, w: 3080, h: 1732 }, clear: null, gapColour: "#f1e4cc", collageGap: 8 },
+  halloween: { label: "Halloween (full-canvas window, clear area 956×538)", src: "../../app/src/main/res/drawable-nodpi/border_overlay.png", size: [1920, 1200],
+             window: { x: 0, y: 0, w: 1920, h: 1200 }, clear: { x: 592, y: 327, w: 956, h: 538 }, gapColour: "#1a0927", collageGap: 12 },
+};
+const booth = PHOTOS.filter(p => p.set === "booth");
+const dancing = booth.filter(p => p.name >= "2026-09-12-11-49-55" && p.name <= "2026-09-12-11-58-20.png");
+const SETS = {
+  dancing: { label: `Dancing kids (${dancing.length})`, photos: dancing },
+  props: { label: "Prop photos (12)", photos: PHOTOS.filter(p => p.set === "props") },
+  booth: { label: `All booth photos (${booth.length})`, photos: booth },
+};
+const DEFAULTS = { border: "wedding", set: "dancing", n: 20, zoom: 2, strategy: "aspect", maxDev: 0.35, gap: 8, outer: "none",
+  outputScale: "artwork", cap: 3840, misfit: "stepDown", grid: null, outline: false };
+let P = { ...DEFAULTS };
+new URLSearchParams(location.search).forEach((v, k) => { P[k] = v === "true" ? true : isNaN(+v) ? v : +v; }); // e.g. ?n=18&zoom=1.4
+const CROP_P = { personScore: 0.5, kpScore: 0.3, objectScore: 0.3, secondaryArea: 0.25, includeSecondary: false,
+  handSize: 1.0, raisedReach: 1.0, margin: 0.05, headroom: 0.0, zoomMode: "fixed", maxZoom: 2, vertical: "centre" };
+
+const SCENARIOS = [
+  ["20 at 2× (wedding)", "The ticket's main case: 20 dancing-kids photos at 2× in the wedding window.", { n: 20 }],
+  ["18: partial last row", "18 photos. No grid fills exactly, so watch the centred last row and which grid wins.", { n: 18 }],
+  ["Prime N (7, 11, 13)", "Awkward counts. Step N with the slider. Does the auto pick stay sensible?", { n: 7 }],
+  ["Small N (2–5)", "Few photos: tiles get big and may stray far from 16:9 (2 photos side by side are 8:9 each).", { n: 2 }],
+  ["Halloween clear area", "Tiles go only inside the 956×538 clear area; the rest of the window is gap colour under the artwork. Try output scale = fit cap.", { border: "halloween", n: 12, gap: 12, zoom: 1 }],
+  ["Props at 1.4×", "Props on sticks need the raised-hand reach. At 1.4×, which tiles get flagged?", { set: "props", n: 12, zoom: 1.4 }],
+];
+
+function devLabel(d) { const lo = 16 / 9 / Math.exp(d), hi = 16 / 9 * Math.exp(d); return `${lo.toFixed(2)}–${hi.toFixed(2)} (±${Math.round((Math.exp(d) - 1) * 100)}%)`; }
+const CONTROLS = [
+  ["h", "Input"],
+  ["select", "border", "Border", Object.entries(BORDERS).map(([k, b]) => [k, b.label])],
+  ["select", "set", "Photos", Object.entries(SETS).map(([k, s]) => [k, s.label])],
+  ["range", "n", "Number of photos (first N in order)", 1, 57, 1, v => v],
+  ["select", "zoom", "Zoom for every tile", [[2, "2×"], [1.4, "1.4×"], [1, "1×"]]],
+  ["h", "Grid"],
+  ["select", "strategy", "Automatic grid choice", Object.entries(Collage.STRATEGIES).map(([k, s]) => [k, s.label])],
+  ["range", "maxDev", "Max tile stray from 16:9", 0.05, 1, 0.01, v => devLabel(v)],
+  ["hint", "The auto pick skips grids beyond this, unless none are within it."],
+  ["h", "Spacing"],
+  ["range", "gap", "Gap between tiles (artwork px)", 0, 96, 2, v => v + "px"],
+  ["select", "outer", "Gap at the window edge", [["none", "None: tiles touch the window"], ["gap", "Same as the gap"]]],
+  ["h", "Output"],
+  ["select", "outputScale", "Output scale", [["artwork", "Artwork pixels as drawn"], ["fitCap", "Scale so the collage area = cap"]]],
+  ["range", "cap", "Cap on collage width (px)", 1920, 5760, 64, v => v + "px"],
+  ["select", "misfit", "Photo that doesn't fit at the zoom", [["stepDown", "Step down that tile (2×, 1.4×, 1×), flag"], ["drop", "Drop that tile to 1×, flag"], ["keepZoom", "Keep the zoom, centre on content, flag (--force-zoom)"]]],
+  ["check", "outline", "Outline flagged tiles in red"],
+];
+
+const images = {};
+function img(src) { if (!images[src]) { const i = new Image(); i.src = src; i.onload = () => schedule(); images[src] = i; } return images[src]; }
+let pending = false; function schedule() { if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+function buildControls() {
+  const el = document.getElementById("controls"); el.innerHTML = "";
+  for (const c of CONTROLS) {
+    if (c[0] === "h") { el.insertAdjacentHTML("beforeend", `<h3>${c[1]}</h3>`); continue; }
+    if (c[0] === "hint") { el.insertAdjacentHTML("beforeend", `<div class="hint">${c[1]}</div>`); continue; }
+    const [type, key, label] = c, lab = document.createElement("label");
+    if (type === "range") {
+      const [, , , min, max, step, fmt] = c;
+      lab.innerHTML = `${label} <span class="v">${fmt(P[key])}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${P[key]}">`;
+      lab.querySelector("input").oninput = e => { P[key] = +e.target.value; if (key !== "cap") P.grid = null; lab.querySelector(".v").textContent = fmt(P[key]); schedule(); };
+    } else if (type === "select") {
+      lab.innerHTML = `${label}<select>${c[3].map(([v, t]) => `<option value="${v}" ${String(P[key]) === String(v) ? "selected" : ""}>${t}</option>`).join("")}</select>`;
+      lab.querySelector("select").onchange = e => { const v = e.target.value; P[key] = isNaN(+v) ? v : +v; P.grid = null;
+        if (key === "border") { P.gap = BORDERS[v].collageGap; buildControls(); } schedule(); };
+    } else {
+      lab.innerHTML = `<input type="checkbox" ${P[key] ? "checked" : ""}> ${label}`;
+      lab.querySelector("input").onchange = e => { P[key] = e.target.checked; schedule(); };
+    }
+    el.appendChild(lab);
+  }
+  const b = document.createElement("div");
+  b.innerHTML = `<h3>Actions</h3><button class="act" id="full">Render full size</button><button class="act" id="reset">Reset</button>`;
+  el.appendChild(b);
+  b.querySelector("#full").onclick = () => { const c = compose(1); const w = window.open(""); w.document.title = "Full size " + c.width + "x" + c.height; w.document.body.style.margin = 0; w.document.body.appendChild(c); };
+  b.querySelector("#reset").onclick = () => { P = { ...DEFAULTS }; buildControls(); schedule(); };
+}
+
+function buildTabs() {
+  const el = document.getElementById("tabs");
+  SCENARIOS.forEach(([name, text, set], i) => {
+    const b = document.createElement("button"); b.textContent = name;
+    b.onclick = () => { P = { ...DEFAULTS, ...set }; [...el.children].forEach(x => x.classList.remove("on")); b.classList.add("on");
+      document.getElementById("scenario").textContent = text; buildControls(); schedule(); };
+    el.appendChild(b); if (i === 0) { b.classList.add("on"); document.getElementById("scenario").textContent = text; }
+  });
+}
+
+// Everything about the layout, in output pixels
+function layout() {
+  const B = BORDERS[P.border];
+  const area0 = B.clear || B.window;
+  const scale = P.outputScale === "fitCap" ? P.cap / area0.w : Math.min(1, P.cap / area0.w);
+  const s = r => ({ x: r.x * scale, y: r.y * scale, w: r.w * scale, h: r.h * scale });
+  const area = s(area0), win = s(B.window);
+  const photos = SETS[P.set].photos.slice(0, Math.min(P.n, SETS[P.set].photos.length));
+  const n = photos.length, gap = P.gap * scale, outer = P.outer === "gap" ? gap : 0;
+  const cands = Collage.candidates(n, area, gap, outer);
+  const auto = Collage.pick(cands, n, P.strategy, P.maxDev);
+  const g = (P.grid && cands.find(c => c.c === P.grid)) || auto;
+  const rects = Collage.tiles(n, area, g, gap, outer);
+  const tiles = photos.map((photo, i) => {
+    const r = rects[i];
+    const tb = { window: { x: 0, y: 0, w: r.w, h: r.h }, clear: { x: 0, y: 0, w: r.w, h: r.h } };
+    const subs = CropRule.subjects(photo, CROP_P);
+    let res = CropRule.crop(photo, subs, tb, CROP_P, P.zoom);
+    const flags = [];
+    if (res.flags.some(f => f.includes("no people"))) flags.push("no people: full frame");
+    else if (res.flags.some(f => f.includes("doesn't fit"))) {
+      if (P.misfit === "stepDown") {
+        const z = [2, 1.4, 1].filter(z => z < P.zoom).find(z => !CropRule.crop(photo, subs, tb, CROP_P, z).flags.some(f => f.includes("doesn't fit"))) || 1;
+        res = CropRule.crop(photo, subs, tb, CROP_P, z); flags.push(`doesn't fit at ${P.zoom}×: stepped down to ${z}×`); }
+      else if (P.misfit === "drop") { res = CropRule.crop(photo, subs, tb, CROP_P, 1); flags.push(`doesn't fit at ${P.zoom}×: dropped to 1×`); }
+      else { // keep the zoom, centre on the content
+        const a = r.w / r.h, bw = photo.w / photo.h > a ? photo.h * a : photo.w, cw = bw / P.zoom, ch = cw / a, R = res.R;
+        const x = Math.min(photo.w - cw, Math.max(0, (R.x0 + R.x1) / 2 - cw / 2)), y = Math.min(photo.h - ch, Math.max(0, (R.y0 + R.y1) / 2 - ch / 2));
+        res = { crop: { x0: x, y0: y, x1: x + cw, y1: y + ch }, zoom: P.zoom, R };
+        flags.push(`doesn't fit at ${P.zoom}×: content cut`);
+      }
+    }
+    const cropW = res.crop.x1 - res.crop.x0;
+    if (cropW < 960 - 0.5) flags.push(`crop only ${Math.round(cropW)}px wide (<960)`);
+    return { photo, rect: r, crop: res.crop, flags, srcPerOut: cropW / r.w };
+  });
+  return { B, scale, area, win, n, gap, outer, cands, auto, g, tiles, canvas: { w: B.size[0] * scale, h: B.size[1] * scale } };
+}
+
+function compose(f) {
+  const L = layout();
+  const c = document.createElement("canvas"); c.width = Math.round(L.canvas.w * f); c.height = Math.round(L.canvas.h * f);
+  const x = c.getContext("2d"); x.imageSmoothingQuality = "high";
+  x.fillStyle = L.B.gapColour; x.fillRect(L.win.x * f, L.win.y * f, L.win.w * f, L.win.h * f);
+  for (const t of L.tiles) {
+    const im = img(SRC[t.photo.set] + t.photo.name), r = t.rect, k = t.crop;
+    if (im.complete && im.naturalWidth) x.drawImage(im, k.x0, k.y0, k.x1 - k.x0, k.y1 - k.y0, r.x * f, r.y * f, r.w * f, r.h * f);
+    else { x.fillStyle = "#999"; x.fillRect(r.x * f, r.y * f, r.w * f, r.h * f); }
+  }
+  const bi = img(L.B.src); if (bi.complete && bi.naturalWidth) x.drawImage(bi, 0, 0, c.width, c.height);
+  if (P.outline) { x.strokeStyle = "#e00"; x.lineWidth = Math.max(2, 6 * f);
+    for (const t of L.tiles) if (t.flags.length) x.strokeRect(t.rect.x * f, t.rect.y * f, t.rect.w * f, t.rect.h * f); }
+  return c;
+}
+
+function render() {
+  const L = layout();
+  const out = document.getElementById("out"), f = Math.min(1, 2400 / L.canvas.w);
+  const c = compose(f); out.width = c.width; out.height = c.height; out.getContext("2d").drawImage(c, 0, 0);
+  const pct = d => Math.round((Math.exp(d) - 1) * 100) + "%";
+  const rows = L.cands.map(g => `<tr data-c="${g.c}" class="${g === L.g ? "pick" : ""} ${g.dev > P.maxDev ? "bad" : ""}">
+    <td>${g === L.auto ? "✓" : ""}</td><td>${g.c}×${g.r}</td><td>${Math.round(g.tw)}×${Math.round(g.th)}</td><td>${g.aspect.toFixed(2)}</td>
+    <td>${pct(g.dev)}</td><td>${g.empty}</td></tr>`).join("");
+  const t = document.getElementById("grids");
+  t.innerHTML = `<tr><th></th><th>grid</th><th>tile px</th><th>aspect</th><th>stray</th><th>empty</th></tr>` + rows;
+  [...t.querySelectorAll("tr[data-c]")].forEach(tr => tr.onclick = () => { P.grid = +tr.dataset.c; schedule(); });
+  const flagged = L.tiles.filter(t => t.flags.length);
+  const minS = Math.min(...L.tiles.map(t => t.srcPerOut));
+  document.getElementById("state").innerHTML = `
+    <div>Output canvas <b>${Math.round(L.canvas.w)}×${Math.round(L.canvas.h)}</b> (scale ${L.scale.toFixed(2)}), collage area ${Math.round(L.area.w)}×${Math.round(L.area.h)}</div>
+    <div>Grid <b>${L.g.c}×${L.g.r}</b> ${P.grid ? "(forced: --grid " + L.g.c + "x" + L.g.r + ")" : "(auto)"}, tiles ${Math.round(L.g.tw)}×${Math.round(L.g.th)} = ${L.g.aspect.toFixed(2)}:1 (16:9 = 1.78), stray ${pct(L.g.dev)}</div>
+    <div>Gap ${Math.round(L.gap)}px in the output${L.outer ? ", also at the window edge" : ""}</div>
+    <div>Source px per output px: min <b>${minS.toFixed(2)}</b> ${minS < 1 ? '<span class="flags">(upscaled: soft)</span>' : "(downscaled: sharp)"}</div>
+    <div>Flagged: <b>${flagged.length}</b> of ${L.n}</div>
+    ${flagged.map(t => `<div class="flags">${t.photo.name}: ${t.flags.join("; ")}</div>`).join("")}`;
+}
+
+buildTabs(); buildControls(); render();
+</script>
+</body>
+</html>
