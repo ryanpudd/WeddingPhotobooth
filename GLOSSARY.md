@@ -12,6 +12,10 @@ _Avoid_: Upside-down mode, flipped, rotated mount
 A single image the booth captures and a guest keeps.
 _Avoid_: Tile, picture, shot, capture
 
+**Upside-down photo**:
+A photo taken on an inverted mount before the booth could turn photos the right way up, so it was saved upside down.
+_Avoid_: Flipped photo, rotated photo
+
 **Border**:
 Decorative artwork, themed for the event (wedding, Halloween), that surrounds a photo.
 _Avoid_: Frame, surround, overlay
