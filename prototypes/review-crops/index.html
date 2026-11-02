@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: reviewing crops</title>
+<!--
+  PROTOTYPE, throwaway. Branch prototype/review-crops, never merged. Ticket:
+  "How do you review crops and override them?" (#16).
+  Three variants of the contact sheet + crop override file, switchable via ?variant=A|B|C
+  and the floating bar at the bottom (or the left/right arrow keys).
+  Detections and the crop rule are copied from prototype/crop-rule. Thumbnails come from
+  tmp/crop-rule-prototype/thumbs/ (gitignored; regenerate with that branch's detect.py).
+  Open over http (e.g. `npx serve .` or `python -m http.server` from the repo root) or
+  double-click; both work in Chrome.
+-->
+<style>
+  :root { --accent: #8a5a12; --ink: #222; --muted: #777; --line: #e3ddd2; --flag: #d9534f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--ink); background: #faf8f4; padding-bottom: 70px; }
+  header { padding: 14px 24px 6px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  h2 { font-size: 16px; margin: 18px 0 8px; }
+  .banner { display: inline-block; background: #fbe9c6; color: #6b4a10; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .intro { max-width: 1100px; color: #444; margin: 6px 0; }
+  .bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; color: #555; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .flagtxt { color: #c0392b; font-size: 12px; }
+  .ovtxt { color: #1f6fb2; font-size: 12px; font-weight: 600; }
+  canvas { display: block; background: #eee; border-radius: 3px; }
+  textarea { width: 100%; font: 12px/1.4 ui-monospace, Consolas, monospace; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: #fffdf8; }
+  button { font: inherit; cursor: pointer; }
+  .msg { font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; margin: 6px 0; }
+  .msg.err { color: #b02a1f; } .msg.warn { color: #8a5a12; } .msg.ok { color: #2d7a3a; }
+  .layout { display: grid; grid-template-columns: 1fr 420px; gap: 18px; padding: 0 24px; align-items: start; }
+  .side { position: sticky; top: 8px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: calc(100vh - 90px); overflow: auto; }
+  .side h3 { margin: 0 0 4px; font-size: 14px; }
+  .skipped { opacity: .35; }
+
+  /* A */
+  .gal { display: flex; flex-wrap: wrap; gap: 10px; }
+  .tile { width: 262px; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 5px; cursor: pointer; }
+  .tile.flag { border: 2px solid var(--flag); }
+  .tile .t1 { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; gap: 6px; }
+  .tile .nm { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .zoomed { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  .zoomed > div { background: #fff; padding: 12px; border-radius: 8px; max-width: 95vw; }
+  .zoomed .pair { display: flex; gap: 10px; }
+
+  /* B */
+  .tabs { display: flex; gap: 6px; margin: 4px 0 10px; }
+  .tabs button { border: 1px solid var(--line); background: #fff; padding: 5px 12px; border-radius: 16px; }
+  .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .rcard { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 12px; }
+  .rcard.flag { border-left: 6px solid var(--flag); }
+  .rcard.ov { border-left: 6px solid #1f6fb2; }
+  .rcard .pair { display: flex; gap: 10px; flex-wrap: wrap; }
+  .rcard .ctl { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 13px; }
+  .seg button { border: 1px solid var(--line); background: #fff; padding: 3px 9px; margin-right: -1px; }
+  .seg button.on { background: #1f6fb2; color: #fff; border-color: #1f6fb2; }
+  .seg button:first-child { border-radius: 12px 0 0 12px; } .seg button:last-child { border-radius: 0 12px 12px 0; }
+  .orig { cursor: crosshair; }
+
+  /* switcher */
+  #switcher { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; border-radius: 999px;
+    padding: 6px 8px; display: flex; gap: 8px; align-items: center; box-shadow: 0 4px 16px rgba(0,0,0,.35); z-index: 30; font-size: 13px; }
+  #switcher button { background: #333; color: #fff; border: 0; border-radius: 999px; width: 30px; height: 30px; font-size: 15px; }
+  #switcher span { min-width: 300px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="banner">PROTOTYPE · throwaway · branch prototype/review-crops</span>
+  <h1 id="title"></h1>
+  <p class="intro" id="intro"></p>
+  <div class="bar">
+    <label>Border <select id="border"></select></label>
+    <span id="stats"></span>
+  </div>
+</header>
+<div id="app"></div>
+<div id="switcher"><button id="prev" title="Previous variant (←)">←</button><span id="vlabel"></span><button id="next" title="Next variant (→)">→</button></div>
+
+<script src="data.js"></script>
+<script src="croprule.js"></script>
+<script>
+// ===================== Shared: borders, the crop rule plus overrides, drawing =====================
+const THUMBS = "../../tmp/crop-rule-prototype/thumbs/";
+const BORDERS = {
+  wedding: { label: "Wedding", src: "../../tmp/wedding-border-prototype/a-mat.png", size: [3840, 2400],
+             window: { x: 380, y: 334, w: 3080, h: 1732 }, clear: { x: 380, y: 334, w: 3080, h: 1732 } },
+  halloween: { label: "Halloween", src: "../../app/src/main/res/drawable-nodpi/border_overlay.png", size: [1920, 1200],
+             window: { x: 0, y: 0, w: 1920, h: 1200 }, clear: { x: 592, y: 327, w: 956, h: 538 } },
+};
+const P = { personScore: 0.5, kpScore: 0.3, objectScore: 0.3, secondaryArea: 0.25, includeSecondary: false,
+  handSize: 1.0, raisedReach: 1.0, margin: 0.05, headroom: 0.0, zoomMode: "fixed", maxZoom: 2, vertical: "centre" };
+let borderKey = new URLSearchParams(location.search).get("border") || "wedding";
+
+// The in-memory override state: photo name -> { zoom, centre:[x,y], crop:[x,y,w], upsideDown, skip, note }
+// Every variant reads and writes this; each variant shows it as a different file format.
+let OV = {};
+// A starting set so the file isn't empty on first look
+OV["2026-09-12-12-00-39.png"] = { upsideDown: true };
+OV["IMG_20261010_211324_001.jpg"] = { zoom: 1 };
+
+const images = {};
+function img(src) { if (!images[src]) { const i = new Image(); i.src = src; i.onload = () => schedule(); images[src] = i; } return images[src]; }
+let pending = false;
+function schedule() { if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+// An upside-down photo is turned 180° before detection. The prototype can't rerun detection,
+// so it turns the existing detections with the photo (good enough to see the crop move).
+function turned(photo) {
+  const W = photo.w, H = photo.h, tb = b => [W - b[2], H - b[3], W - b[0], H - b[1]];
+  return { ...photo, turned: true,
+    persons: photo.persons.map(d => ({ ...d, box: tb(d.box), kpts: (d.kpts || []).map(k => [W - k[0], H - k[1], k[2]]) })),
+    objects: photo.objects.map(o => ({ ...o, box: tb(o.box) })) };
+}
+
+function decide(photo0) {
+  const ov = OV[photo0.name] || {};
+  const photo = ov.upsideDown ? turned(photo0) : photo0;
+  const border = BORDERS[borderKey];
+  const subs = CropRule.subjects(photo, P);
+  const auto = CropRule.crop(photo, subs, border, P, null);
+  let res = (ov.zoom && !ov.crop) ? CropRule.crop(photo, subs, border, P, ov.zoom) : { ...auto, flags: [...auto.flags] };
+  const aspect = border.window.w / border.window.h;
+  const clampC = c => { const w = c.x1 - c.x0, h = c.y1 - c.y0, x = Math.min(photo.w - w, Math.max(0, c.x0)), y = Math.min(photo.h - h, Math.max(0, c.y0));
+    return { x0: x, y0: y, x1: x + w, y1: y + h }; };
+  if (ov.crop) { const [x, y, w] = ov.crop, h = w / aspect; res = { crop: clampC({ x0: x, y0: y, x1: x + w, y1: y + h }), zoom: +(photo.w / aspect > photo.h ? photo.h * aspect / w : photo.w / w).toFixed(2), R: auto.R, flags: [] }; }
+  if (ov.centre && !ov.crop) { const w = res.crop.x1 - res.crop.x0, h = res.crop.y1 - res.crop.y0;
+    res.crop = clampC({ x0: ov.centre[0] - w / 2, y0: ov.centre[1] - h / 2, x1: ov.centre[0] + w / 2, y1: ov.centre[1] + h / 2 }); }
+  res.flags = res.flags.filter(f => f !== "override");
+  const autoFlag = auto.flags.length > 0;
+  const overridden = Object.keys(ov).some(k => k !== "note");
+  return { photo, subs, res, auto, autoFlag, ov, overridden, skip: !!ov.skip };
+}
+
+function drawBox(ctx, b, s, color, width = 2, dash = []) {
+  if (!b) return; ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+  ctx.strokeRect(b.x0 * s, b.y0 * s, (b.x1 - b.x0) * s, (b.y1 - b.y0) * s); ctx.restore();
+}
+function drawThumb(ctx, photo, sx, sy, sw, sh, dx, dy, dw, dh) { // source rect in photo pixels (turned space)
+  const th = img(THUMBS + photo.thumb); if (!(th.complete && th.naturalWidth)) return;
+  const ts = th.naturalWidth / photo.w;
+  ctx.save();
+  if (photo.turned) { // turned space -> original: x' = W - x
+    ctx.translate(dx + dw, dy + dh); ctx.rotate(Math.PI);
+    ctx.drawImage(th, (photo.w - sx - sw) * ts, (photo.h - sy - sh) * ts, sw * ts, sh * ts, 0, 0, dw, dh);
+  } else ctx.drawImage(th, sx * ts, sy * ts, sw * ts, sh * ts, dx, dy, dw, dh);
+  ctx.restore();
+}
+function originalCanvas(d, W, boxes = true) {
+  const { photo, subs, res } = d, s = W / photo.w;
+  const c = document.createElement("canvas"); c.width = W; c.height = Math.round(photo.h * s);
+  const ctx = c.getContext("2d");
+  drawThumb(ctx, photo, 0, 0, photo.w, photo.h, 0, 0, c.width, c.height);
+  if (boxes) {
+    for (const sub of subs) {
+      const prim = sub.role === "primary";
+      drawBox(ctx, sub.person, s, prim ? "#2e86de" : "#aaa", prim ? 2 : 1.5, prim ? [] : [4, 3]);
+      for (const ob of sub.held) drawBox(ctx, ob, s, "#8e44ad", 2);
+    }
+    drawBox(ctx, res.R, s, "#27ae60", 1.5, [6, 4]);
+  }
+  ctx.fillStyle = "rgba(0,0,0,.45)"; const k = res.crop; // dim outside the crop
+  ctx.fillRect(0, 0, c.width, k.y0 * s); ctx.fillRect(0, k.y1 * s, c.width, c.height - k.y1 * s);
+  ctx.fillRect(0, k.y0 * s, k.x0 * s, (k.y1 - k.y0) * s); ctx.fillRect(k.x1 * s, k.y0 * s, c.width - k.x1 * s, (k.y1 - k.y0) * s);
+  drawBox(ctx, res.crop, s, "#e74c3c", 2.5);
+  c._scale = s;
+  return c;
+}
+function framedOnto(ctx, d, x, y, W) {
+  const border = BORDERS[borderKey], bs = W / border.size[0], H = Math.round(border.size[1] * bs);
+  ctx.fillStyle = "#f1e4cc"; ctx.fillRect(x, y, W, H);
+  const k = d.res.crop;
+  drawThumb(ctx, d.photo, k.x0, k.y0, k.x1 - k.x0, k.y1 - k.y0, x + border.window.x * bs, y + border.window.y * bs, border.window.w * bs, border.window.h * bs);
+  const bi = img(border.src); if (bi.complete && bi.naturalWidth) ctx.drawImage(bi, x, y, W, H);
+  return H;
+}
+function framedCanvas(d, W) {
+  const border = BORDERS[borderKey];
+  const c = document.createElement("canvas"); c.width = W; c.height = Math.round(W * border.size[1] / border.size[0]);
+  framedOnto(c.getContext("2d"), d, 0, 0, W); return c;
+}
+const zstr = z => (+z).toFixed(z % 1 ? (Math.abs(z * 10 - Math.round(z * 10)) < 1e-6 ? 1 : 2) : 0) + "×";
+const flagText = d => d.autoFlag ? (d.auto.flags[0].startsWith("no people") ? "no people found: full frame" : "content doesn't fit: centred 1×") : "";
+function ovSummary(ov) {
+  const p = [];
+  if (ov.skip) p.push("skip"); if (ov.upsideDown) p.push("upside down"); if (ov.zoom) p.push("zoom " + zstr(ov.zoom));
+  if (ov.centre) p.push("moved"); if (ov.crop) p.push("explicit crop"); return p.join(", ");
+}
+function stats(ds) {
+  const n = ds.length, fl = ds.filter(d => d.autoFlag).length, ov = ds.filter(d => d.overridden).length, sk = ds.filter(d => d.skip).length;
+  document.getElementById("stats").innerHTML = `${n} photos · <b style="color:#c0392b">${fl} flagged</b> · <b style="color:#1f6fb2">${ov} overridden</b> · ${sk} skipped`;
+}
+// Flagged first (needs review most), then overridden, then the rest, each in name order
+const order = (a, b) => (b.autoFlag - a.autoFlag) || (b.overridden - a.overridden) || a.photo.name.localeCompare(b.photo.name);
+
+// Unknown names: what a rerun does with an entry whose photo has gone. Kept in the file, warned about.
+function staleWarnings() {
+  const names = new Set(PHOTOS.map(p => p.name));
+  return Object.keys(OV).filter(n => !names.has(n)).map(n => `warning: _photoframe-overrides: "${n}" is not in the input; entry kept, ignored`);
+}
+
+// ===================== Override file formats =====================
+const KEYS = ["zoom", "centre", "crop", "upsideDown", "skip", "note"];
+function toJson(onlyOverridden = true) {
+  const photos = {};
+  for (const n of Object.keys(OV).sort()) { const o = OV[n]; if (!Object.keys(o).length) continue;
+    photos[n] = Object.fromEntries(KEYS.filter(k => o[k] !== undefined && o[k] !== false).map(k => [k, o[k]])); }
+  // one entry per line keeps it easy to read and to edit in bulk
+  const lines = Object.entries(photos).map(([n, o]) => `    ${JSON.stringify(n)}: ${JSON.stringify(o).replace(/,"/g, ', "').replace(/":/g, '": ')}`);
+  return `{\n  "version": 1,\n  "photos": {\n${lines.join(",\n")}\n  }\n}\n`;
+}
+function fromJson(text) {
+  const j = JSON.parse(text); const errs = [];
+  if (j.version !== 1) errs.push(`"version" must be 1`);
+  for (const k of Object.keys(j)) if (!["version", "photos"].includes(k)) errs.push(`unknown key "${k}"`);
+  const out = {};
+  for (const [n, o] of Object.entries(j.photos || {})) {
+    for (const k of Object.keys(o)) if (!KEYS.includes(k)) errs.push(`${n}: unknown key "${k}"`);
+    if (o.zoom !== undefined && ![1, 1.4, 2].includes(o.zoom)) errs.push(`${n}: zoom must be 1, 1.4 or 2`);
+    if (o.crop && o.zoom) errs.push(`${n}: give crop or zoom, not both`);
+    out[n] = o;
+  }
+  if (errs.length) throw new Error(errs.join("\n"));
+  return out;
+}
+const CSV_HEAD = "photo,zoom,upsideDown,skip,chosen,flag";
+function toCsv(ds) {
+  return CSV_HEAD + "\n" + ds.slice().sort((a, b) => a.photo.name.localeCompare(b.photo.name)).map(d => {
+    const o = d.ov; return [d.photo.name, o.zoom || "auto", o.upsideDown ? "yes" : "", o.skip ? "yes" : "", zstr(d.res.zoom), flagText(d)].join(",");
+  }).join("\n") + "\n";
+}
+function fromCsv(text) {
+  const lines = text.trim().split(/\r?\n/), out = {}, errs = [];
+  if (lines[0].trim() !== CSV_HEAD) errs.push("first line must be: " + CSV_HEAD);
+  for (const [i, line] of lines.slice(1).entries()) {
+    if (!line.trim()) continue;
+    const [photo, zoom, up, skip] = line.split(",").map(s => (s || "").trim());
+    const o = {};
+    if (zoom && zoom !== "auto") { const z = +zoom.replace("×", "").replace("x", ""); if (![1, 1.4, 2].includes(z)) errs.push(`line ${i + 2}: zoom must be auto, 1, 1.4 or 2`); else o.zoom = z; }
+    if (up === "yes") o.upsideDown = true; else if (up) errs.push(`line ${i + 2}: upsideDown must be yes or empty`);
+    if (skip === "yes") o.skip = true; else if (skip) errs.push(`line ${i + 2}: skip must be yes or empty`);
+    if (Object.keys(o).length) out[photo] = o; else out[photo] = {};
+  }
+  if (errs.length) throw new Error(errs.join("\n"));
+  for (const n of Object.keys(out)) if (!Object.keys(out[n]).length) delete out[n];
+  return out;
+}
+
+// ===================== Variant A: read-only contact sheet page + hand-edited JSON =====================
+function VariantA(app, ds) {
+  app.innerHTML = `<div class="layout"><main id="main"></main><div class="side">
+    <h3>_photoframe-overrides.json</h3>
+    <div class="muted">Lists only the photos you've overridden. In the real tool you edit this in a text editor and rerun
+      <code>photoframe frame</code>; here, edit it and press Rerun. Photos are named by file name (clashes are already exit 2).</div>
+    <textarea id="file" rows="16" spellcheck="false"></textarea>
+    <button id="rerun">Rerun</button> <span class="muted">Try a name that isn't in the input, an unknown key, or <code>"zoom": 3</code>.</span>
+    <div id="msgs"></div>
+    <h3 style="margin-top:12px">Entry keys</h3>
+    <div class="muted"><code>zoom</code> 1 | 1.4 | 2 · <code>centre</code> [x, y] in photo pixels, moves the crop ·
+      <code>crop</code> [x, y, width] in photo pixels, height from the window · <code>upsideDown</code> true ·
+      <code>skip</code> true · <code>note</code> any text</div>
+  </div></div>`;
+  const main = app.querySelector("#main");
+  const flagged = ds.filter(d => d.autoFlag), rest = ds.filter(d => !d.autoFlag);
+  const section = (title, list) => {
+    main.insertAdjacentHTML("beforeend", `<h2>${title} (${list.length})</h2>`);
+    const g = document.createElement("div"); g.className = "gal"; main.appendChild(g);
+    for (const d of list) {
+      const t = document.createElement("div"); t.className = "tile" + (d.autoFlag ? " flag" : "") + (d.skip ? " skipped" : "");
+      t.appendChild(framedCanvas(d, 250));
+      t.insertAdjacentHTML("beforeend", `<div class="t1"><span class="nm" title="${d.photo.name}">${d.photo.name}</span><b>${zstr(d.res.zoom)}</b></div>
+        ${d.autoFlag ? `<div class="flagtxt">${flagText(d)}</div>` : ""}${d.overridden ? `<div class="ovtxt">override: ${ovSummary(d.ov)}</div>` : ""}`);
+      t.onclick = () => zoomIn(d);
+      g.appendChild(t);
+    }
+  };
+  section("Needs review", flagged); section("Everything else", rest);
+  const ta = app.querySelector("#file"); ta.value = toJson();
+  const msgs = app.querySelector("#msgs");
+  const show = () => { msgs.innerHTML = staleWarnings().map(w => `<div class="msg warn">${w}</div>`).join(""); };
+  show();
+  app.querySelector("#rerun").onclick = () => {
+    try { OV = fromJson(ta.value); render(); }
+    catch (e) { msgs.innerHTML = `<div class="msg err">error: _photoframe-overrides.json\n${e.message}\n(exit 2, nothing written)</div>`; }
+  };
+}
+function zoomIn(d) {
+  const z = document.createElement("div"); z.className = "zoomed";
+  z.innerHTML = `<div><div class="pair"></div><div class="muted" style="margin-top:6px">${d.photo.name} · ${zstr(d.res.zoom)} · click anywhere to close.
+    Copy into the file to change it: <code>${JSON.stringify(d.photo.name)}: { "zoom": 1.4 }</code></div></div>`;
+  z.querySelector(".pair").append(originalCanvas(d, 640), framedCanvas(d, 640));
+  z.onclick = () => z.remove(); document.body.appendChild(z);
+}
+
+// ===================== Variant B: interactive review page that writes the file =====================
+let tabB = "review";
+function VariantB(app, ds) {
+  app.innerHTML = `<div class="layout"><main id="main"></main><div class="side">
+    <h3>_photoframe-overrides.json</h3>
+    <div class="muted">The page builds this as you click. Download it into the <code>--out</code> folder (replacing the old one) and rerun
+      <code>photoframe frame</code>. The page itself never writes framed photos.</div>
+    <textarea id="file" rows="14" readonly spellcheck="false"></textarea>
+    <button id="dl">Download _photoframe-overrides.json</button> <button id="clear">Clear all overrides</button>
+    <div id="msgs"></div>
+  </div></div>`;
+  const main = app.querySelector("#main");
+  const lists = { review: ds.filter(d => d.autoFlag), overridden: ds.filter(d => d.overridden), all: ds };
+  main.innerHTML = `<div class="tabs">${[["review", "Needs review"], ["overridden", "Overridden"], ["all", "All"]].map(([k, t]) =>
+    `<button data-k="${k}" class="${k === tabB ? "on" : ""}">${t} (${lists[k].length})</button>`).join("")}</div>
+    <div class="muted" style="margin-bottom:8px">Click the original to centre the crop there. Green dashed: what must stay in.</div>`;
+  main.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { tabB = b.dataset.k; render(); });
+  for (const d of lists[tabB]) {
+    const n = d.photo.name, o = OV[n] || {};
+    const set = (k, v) => { const e = { ...(OV[n] || {}) }; if (v === undefined || v === false) delete e[k]; else e[k] = v;
+      if (k === "zoom") delete e.crop; if (Object.keys(e).length) OV[n] = e; else delete OV[n]; render(); };
+    const card = document.createElement("div"); card.className = "rcard" + (d.autoFlag ? " flag" : d.overridden ? " ov" : "") + (d.skip ? " skipped" : "");
+    const pair = document.createElement("div"); pair.className = "pair";
+    const oc = originalCanvas(d, 430); oc.className = "orig";
+    // The canvas shows the photo after any upside-down turn, so the click is already in the turned photo's pixels
+    oc.onclick = e => { const r = oc.getBoundingClientRect(), k = oc.width / r.width;
+      set("centre", [Math.round((e.clientX - r.left) * k / oc._scale), Math.round((e.clientY - r.top) * k / oc._scale)]); };
+    pair.append(oc, framedCanvas(d, 430)); card.appendChild(pair);
+    card.insertAdjacentHTML("beforeend", `<div class="ctl"><b>${n}</b><span>${zstr(d.res.zoom)}</span>
+      ${d.autoFlag ? `<span class="flagtxt">${flagText(d)}</span>` : ""}
+      <span class="seg">${[["", "auto"], [1, "1×"], [1.4, "1.4×"], [2, "2×"]].map(([v, t]) => `<button data-z="${v}" class="${String(o.zoom || "") === String(v) ? "on" : ""}">${t}</button>`).join("")}</span>
+      ${o.centre ? `<button data-reset>Reset position</button>` : ""}
+      <label><input type="checkbox" data-up ${o.upsideDown ? "checked" : ""}> upside down</label>
+      <label><input type="checkbox" data-skip ${o.skip ? "checked" : ""}> skip</label>
+      <input data-note placeholder="note" value="${o.note || ""}" style="width:140px"></div>`);
+    card.querySelectorAll("[data-z]").forEach(b => b.onclick = () => set("zoom", b.dataset.z ? +b.dataset.z : undefined));
+    card.querySelector("[data-up]").onchange = e => set("upsideDown", e.target.checked);
+    card.querySelector("[data-skip]").onchange = e => set("skip", e.target.checked);
+    card.querySelector("[data-note]").onchange = e => set("note", e.target.value || undefined);
+    const rs = card.querySelector("[data-reset]"); if (rs) rs.onclick = () => set("centre", undefined);
+    main.appendChild(card);
+  }
+  if (!lists[tabB].length) main.insertAdjacentHTML("beforeend", `<p class="muted">Nothing here.</p>`);
+  const text = toJson(); app.querySelector("#file").value = text;
+  app.querySelector("#msgs").innerHTML = staleWarnings().map(w => `<div class="msg warn">${w}</div>`).join("");
+  app.querySelector("#dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    a.download = "_photoframe-overrides.json"; a.click(); };
+  app.querySelector("#clear").onclick = () => { OV = {}; render(); };
+}
+
+// ===================== Variant C: one contact-sheet image + a CSV listing every photo =====================
+function VariantC(app, ds) {
+  const cols = 6, tw = 300, pad = 8, border = BORDERS[borderKey], th = Math.round(tw * border.size[1] / border.size[0]), cap = 34;
+  const sorted = ds.slice().sort((a, b) => a.photo.name.localeCompare(b.photo.name)); // file order: numbers match the CSV
+  const rows = Math.ceil(sorted.length / cols), W = cols * (tw + pad) + pad, H = rows * (th + cap + pad) + pad;
+  app.innerHTML = `<div class="layout"><main>
+    <h2>_photoframe-contact-sheet.jpg <span class="muted">${W}×${H}px, about ${Math.round(W * H * 0.25 / 1024)} KB at JPEG 92</span></h2>
+    <div class="muted" style="margin-bottom:6px">One image, numbered in file order, the same order as the CSV. Red: flagged. Blue: overridden. Struck through: skipped.
+    Opens in any photo viewer, but you can't zoom into a single photo or see what detection found.</div>
+    <canvas id="sheet" width="${W}" height="${H}" style="width:100%;max-width:${W}px"></canvas></main>
+    <div class="side"><h3>_photoframe-overrides.csv</h3>
+      <div class="muted">Lists <b>every</b> photo, with what the tool chose. Edit <code>zoom</code> (auto, 1, 1.4, 2), <code>upsideDown</code> or <code>skip</code> (yes)
+      and rerun. <code>chosen</code> and <code>flag</code> are rewritten each run, so edits there are lost. No room for a moved or explicit crop.</div>
+      <textarea id="file" rows="22" spellcheck="false" wrap="off"></textarea>
+      <button id="rerun">Rerun</button><div id="msgs"></div></div></div>`;
+  const ctx = app.querySelector("#sheet").getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+  sorted.forEach((d, i) => {
+    const x = pad + (i % cols) * (tw + pad), y = pad + Math.floor(i / cols) * (th + cap + pad);
+    framedOnto(ctx, d, x, y, tw);
+    const col = d.autoFlag ? "#d9534f" : d.overridden ? "#1f6fb2" : null;
+    if (col) { ctx.strokeStyle = col; ctx.lineWidth = 4; ctx.strokeRect(x + 2, y + 2, tw - 4, th - 4); }
+    ctx.fillStyle = col || "#333"; ctx.beginPath(); ctx.arc(x + 16, y + 16, 13, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 12px system-ui"; ctx.textAlign = "center"; ctx.fillText(i + 1, x + 16, y + 20);
+    ctx.textAlign = "left"; ctx.fillStyle = "#333"; ctx.font = "12px system-ui";
+    ctx.fillText(`${d.photo.name}  ${zstr(d.res.zoom)}`, x, y + th + 14);
+    if (d.autoFlag || d.overridden) { ctx.fillStyle = col; ctx.fillText(d.autoFlag ? flagText(d) : "override: " + ovSummary(d.ov), x, y + th + 28); }
+    if (d.skip) { ctx.strokeStyle = "#555"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + tw, y + th); ctx.moveTo(x + tw, y); ctx.lineTo(x, y + th); ctx.stroke(); }
+  });
+  const ta = app.querySelector("#file"); ta.value = toCsv(ds);
+  const msgs = app.querySelector("#msgs");
+  msgs.innerHTML = staleWarnings().map(w => `<div class="msg warn">${w}</div>`).join("");
+  app.querySelector("#rerun").onclick = () => {
+    try { OV = fromCsv(ta.value); render(); }
+    catch (e) { msgs.innerHTML = `<div class="msg err">error: _photoframe-overrides.csv\n${e.message}\n(exit 2, nothing written)</div>`; }
+  };
+}
+
+// ===================== Switcher =====================
+const VARIANTS = {
+  A: { name: "Read-only page + hand-edited JSON", fn: VariantA,
+    intro: "<b>_photoframe-contact-sheet.html</b> is a report: framed photos only, flagged ones in their own section at the top, click one to see the original with the crop. You change things by editing <b>_photoframe-overrides.json</b> (only the overridden photos) in a text editor and rerunning." },
+  B: { name: "Review page that writes the overrides", fn: VariantB,
+    intro: "<b>_photoframe-contact-sheet.html</b> is a review tool: every card shows the original and the framed photo with zoom buttons, click-to-move, upside down, skip and a note. It builds <b>_photoframe-overrides.json</b> (only the overridden photos) for you to download into the output folder, then you rerun." },
+  C: { name: "One image + CSV of every photo", fn: VariantC,
+    intro: "<b>_photoframe-contact-sheet.jpg</b> is a single numbered image of every framed photo. <b>_photoframe-overrides.csv</b> lists every photo with what the tool chose; edit a column and rerun." },
+};
+const KEYSV = Object.keys(VARIANTS);
+let variant = new URLSearchParams(location.search).get("variant") || "A"; if (!VARIANTS[variant]) variant = "A";
+function go(v) { variant = v; const u = new URL(location); u.searchParams.set("variant", v); history.replaceState(null, "", u); render(); }
+document.getElementById("prev").onclick = () => go(KEYSV[(KEYSV.indexOf(variant) + KEYSV.length - 1) % KEYSV.length]);
+document.getElementById("next").onclick = () => go(KEYSV[(KEYSV.indexOf(variant) + 1) % KEYSV.length]);
+document.addEventListener("keydown", e => { if (e.target.closest("input,textarea,select,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") document.getElementById("prev").click(); if (e.key === "ArrowRight") document.getElementById("next").click(); });
+const bsel = document.getElementById("border");
+bsel.innerHTML = Object.entries(BORDERS).map(([k, b]) => `<option value="${k}" ${k === borderKey ? "selected" : ""}>${b.label}</option>`).join("");
+bsel.onchange = () => { borderKey = bsel.value; render(); };
+
+function render() {
+  const app = document.getElementById("app"), y = scrollY;
+  const ds = PHOTOS.map(decide).sort(order);
+  document.getElementById("title").textContent = `How do you review crops and override them? Variant ${variant}: ${VARIANTS[variant].name}`;
+  document.getElementById("intro").innerHTML = VARIANTS[variant].intro;
+  document.getElementById("vlabel").textContent = `${variant} (${VARIANTS[variant].name})`;
+  stats(ds); VARIANTS[variant].fn(app, ds); scrollTo(0, y);
+}
+render();
+</script>
+</body>
+</html>
